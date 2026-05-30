@@ -252,45 +252,34 @@ class SchedulingController:
         self, charging_area: ChargingArea, waiting_area: WaitingArea
     ) -> None:
         """
-        等候区叫号服务：
-        isCallPaused 为 True 时暂停叫号；
-        多桩空位时触发 calcMultiSpotOptimal，否则按排队号顺序逐辆分配。
+        等候区叫号服务：每种模式每次只叫一辆车。
         """
         if self.isCallPaused:
             return
 
         for mode in (ChargeMode.FAST.value, ChargeMode.TRICKLE.value):
-            while not self.isCallPaused:
-                mode_waiting = [
-                    req for req in waiting_area.currentRequests if req.chargeMode == mode
-                ]
-                if not mode_waiting:
-                    break
+            mode_waiting = [
+                req for req in waiting_area.currentRequests if req.chargeMode == mode
+            ]
+            if not mode_waiting:
+                continue
 
-                mode_waiting.sort(key=lambda x: x.queueNumber.generateTime)
-                empty_count = self._countFullyAvailablePiles(mode, charging_area)
+            mode_waiting.sort(key=lambda x: x.queueNumber.generateTime)
+            empty_count = self._countFullyAvailablePiles(mode, charging_area)
 
-                if empty_count >= 2:
-                    before_count = len(mode_waiting)
-                    self.calcMultiSpotOptimal(empty_count, mode, charging_area, waiting_area)
-                    after_count = len([
-                        req for req in waiting_area.currentRequests if req.chargeMode == mode
-                    ])
-                    if after_count >= before_count:
-                        break
+            if empty_count >= 2:
+                self.calcMultiSpotOptimal(empty_count, mode, charging_area, waiting_area)
+            else:
+                req = mode_waiting[0]
+                idle_pile = charging_area.findIdlePile(mode)
+                if idle_pile and idle_pile.canAddToQueue():
+                    waiting_area.removeRequest(req)
+                    self.dispatchToPile(req, idle_pile)
                 else:
-                    req = mode_waiting[0]
-                    idle_pile = charging_area.findIdlePile(mode)
-                    if idle_pile and idle_pile.canAddToQueue():
+                    best_pile = self.findBestPileForRequest(req, charging_area)
+                    if best_pile:
                         waiting_area.removeRequest(req)
-                        self.dispatchToPile(req, idle_pile)
-                    else:
-                        best_pile = self.findBestPileForRequest(req, charging_area)
-                        if best_pile:
-                            waiting_area.removeRequest(req)
-                            self.dispatchToPile(req, best_pile)
-                        else:
-                            break
+                        self.dispatchToPile(req, best_pile)
 
     def _countFullyAvailablePiles(self, mode: str, charging_area: ChargingArea) -> int:
         """统计某模式下完全空闲（Available 且无排队）的充电桩数量。"""

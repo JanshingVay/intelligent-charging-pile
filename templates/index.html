@@ -4,338 +4,266 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能充电桩调度计费系统</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        :root {
-            --primary: #2563eb;
-            --success: #16a34a;
-            --warning: #d97706;
-            --danger: #dc2626;
-            --bg: #f1f5f9;
-        }
-        body { background: var(--bg); min-height: 100vh; }
-        .navbar { background: linear-gradient(135deg, #1e40af, #2563eb) !important; }
-        .stat-card {
-            border: none; border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.08);
-            transition: transform .2s;
-        }
-        .stat-card:hover { transform: translateY(-2px); }
-        .stat-icon {
-            width: 48px; height: 48px; border-radius: 10px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 1.4rem;
-        }
-        .pile-card {
-            border: none; border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.08);
-            border-left: 4px solid #ccc;
-            transition: transform .2s;
-        }
+        .status-available { background-color: #d4edda; color: #155724; }
+        .status-charging { background-color: #cce5ff; color: #004085; }
+        .status-fault { background-color: #f8d7da; color: #721c24; }
+        .pile-card { transition: transform 0.2s; }
         .pile-card:hover { transform: translateY(-2px); }
-        .pile-card.status-available { border-left-color: var(--success); }
-        .pile-card.status-charging { border-left-color: var(--primary); }
-        .pile-card.status-fault { border-left-color: var(--danger); }
-        .badge-available { background: #dcfce7; color: #166534; }
-        .badge-charging { background: #dbeafe; color: #1e40af; }
-        .badge-fault { background: #fee2e2; color: #991b1b; }
-        .section-card {
-            border: none; border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.08);
-        }
-        .section-card .card-header {
-            background: #fff; border-bottom: 1px solid #e2e8f0;
-            font-weight: 600; border-radius: 12px 12px 0 0 !important;
-        }
-        .queue-item {
-            background: #f8fafc; border-radius: 8px;
-            padding: 8px 12px; margin-bottom: 6px; font-size: .875rem;
-        }
-        .price-tag { font-size: .8rem; padding: 2px 8px; border-radius: 4px; }
-        .price-peak { background: #fef3c7; color: #92400e; }
-        .price-normal { background: #e0f2fe; color: #075985; }
-        .price-valley { background: #d1fae5; color: #065f46; }
-        #toast-container {
-            position: fixed; top: 70px; right: 20px; z-index: 9999;
-            display: flex; flex-direction: column; gap: 8px;
-        }
-        .log-entry { font-size: .85rem; padding: 4px 0; border-bottom: 1px solid #f1f5f9; }
-        .log-time { color: #94a3b8; margin-right: 8px; }
-        .auth-card { border: none; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.1); }
-        .progress-thin { height: 6px; border-radius: 3px; }
-        .table-sm td, .table-sm th { font-size: .85rem; }
+        .waiting-area-scroll { max-height: 300px; overflow-y: auto; }
+        .nav-pills .nav-link.active { background-color: #0d6efd; color: white; }
+        .queue-item { border-bottom: 1px dashed #dee2e6; padding: 8px 0; }
+        .queue-item:last-child { border-bottom: none; }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
-            <a class="navbar-brand fw-bold" href="#">
-                <i class="bi bi-ev-station-fill me-2"></i>智能充电桩调度计费系统
-            </a>
-            <div class="d-flex align-items-center gap-2">
-                <span id="call-paused-badge" class="badge bg-warning text-dark d-none">
-                    <i class="bi bi-pause-circle"></i> 叫号暂停中
-                </span>
-                <button class="btn btn-sm btn-outline-light" onclick="refreshData()" title="手动刷新">
-                    <i class="bi bi-arrow-clockwise"></i>
-                </button>
-                <div id="user-info"><span class="nav-link text-white mb-0">未登录</span></div>
+            <a class="navbar-brand" href="#">智能充电桩系统</a>
+            <div class="navbar-nav ms-auto" id="user-info">
+                <span class="nav-link">未登录</span>
             </div>
         </div>
     </nav>
 
-    <div class="container py-4">
-        <!-- 登录 / 注册 -->
-        <div id="login-section" class="row justify-content-center mb-4">
-            <div class="col-lg-10">
-                <div class="text-center mb-4">
-                    <h2 class="fw-bold text-dark">欢迎使用智能充电桩系统</h2>
-                    <p class="text-muted">支持快充/慢充调度、分时计费、故障重调度</p>
-                </div>
-                <div class="row g-4">
-                    <div class="col-md-6">
-                        <div class="card auth-card">
-                            <div class="card-header bg-white fw-bold py-3">
-                                <i class="bi bi-box-arrow-in-right me-2 text-primary"></i>用户登录
-                            </div>
-                            <div class="card-body p-4">
-                                <form id="login-form">
-                                    <div class="mb-3">
-                                        <label class="form-label">用户名</label>
-                                        <input type="text" class="form-control" id="login-user-id" value="user1">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">密码</label>
-                                        <input type="password" class="form-control" id="login-password" value="123456">
-                                    </div>
-                                    <button type="submit" class="btn btn-primary w-100">
-                                        <i class="bi bi-box-arrow-in-right me-1"></i>登录
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="card auth-card">
-                            <div class="card-header bg-white fw-bold py-3">
-                                <i class="bi bi-person-plus me-2 text-success"></i>新用户注册
-                            </div>
-                            <div class="card-body p-4">
-                                <form id="register-form">
-                                    <div class="mb-3">
-                                        <label class="form-label">用户名</label>
-                                        <input type="text" class="form-control" id="register-user-id" placeholder="请输入用户名">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">密码</label>
-                                        <input type="password" class="form-control" id="register-password" placeholder="请输入密码">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">电池容量 (kWh)</label>
-                                        <input type="number" class="form-control" id="register-battery" value="60" min="10" max="200">
-                                    </div>
-                                    <button type="submit" class="btn btn-success w-100">
-                                        <i class="bi bi-person-plus me-1"></i>注册
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <!-- 计费规则说明 -->
-                <div class="card auth-card mt-4">
+    <div class="container mt-4" id="app-container">
+        <!-- 操作历史（页面顶部，始终可见） -->
+        <div id="message-log" class="alert alert-info mb-4" role="alert">等待操作...</div>
+
+        <!-- 登录 / 注册模块 -->
+        <div id="login-section" class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">用户登录</div>
                     <div class="card-body">
-                        <h6 class="fw-bold mb-3"><i class="bi bi-info-circle me-2"></i>计费规则</h6>
-                        <div class="d-flex flex-wrap gap-2">
-                            <span class="price-tag price-peak">峰时 1.0元/度 (10:00-15:00, 18:00-21:00)</span>
-                            <span class="price-tag price-normal">平时 0.7元/度 (7:00-10:00, 15:00-18:00, 21:00-23:00)</span>
-                            <span class="price-tag price-valley">谷时 0.4元/度 (23:00-次日7:00)</span>
-                            <span class="price-tag bg-light text-dark border">服务费 0.8元/度</span>
-                        </div>
+                        <form id="login-form">
+                            <div class="mb-3">
+                                <label class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="login-user-id" value="user1">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">密码</label>
+                                <input type="password" class="form-control" id="login-password" value="123456">
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">登录</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">新用户注册</div>
+                    <div class="card-body">
+                        <form id="register-form">
+                            <div class="mb-3">
+                                <label class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="register-user-id" placeholder="请输入用户名">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">密码</label>
+                                <input type="password" class="form-control" id="register-password" placeholder="请输入密码">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">用户类型</label>
+                                <select class="form-select" id="register-role">
+                                    <option value="user">普通用户</option>
+                                    <option value="admin">管理员</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">注册</button>
+                        </form>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- 主界面 -->
-        <div id="main-section" style="display:none;">
-            <!-- 概览卡片 -->
-            <div class="row g-3 mb-4" id="overview-cards">
-                <div class="col-6 col-md-3">
-                    <div class="card stat-card h-100">
-                        <div class="card-body d-flex align-items-center gap-3">
-                            <div class="stat-icon bg-primary bg-opacity-10 text-primary">
-                                <i class="bi bi-hourglass-split"></i>
-                            </div>
-                            <div>
-                                <div class="text-muted small">等候区</div>
-                                <div class="fw-bold fs-5" id="ov-waiting">-/-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-3">
-                    <div class="card stat-card h-100">
-                        <div class="card-body d-flex align-items-center gap-3">
-                            <div class="stat-icon bg-success bg-opacity-10 text-success">
-                                <i class="bi bi-check-circle"></i>
-                            </div>
-                            <div>
-                                <div class="text-muted small">空闲桩</div>
-                                <div class="fw-bold fs-5" id="ov-available">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-3">
-                    <div class="card stat-card h-100">
-                        <div class="card-body d-flex align-items-center gap-3">
-                            <div class="stat-icon bg-primary bg-opacity-10 text-primary">
-                                <i class="bi bi-lightning-charge"></i>
-                            </div>
-                            <div>
-                                <div class="text-muted small">充电中</div>
-                                <div class="fw-bold fs-5" id="ov-charging">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-3">
-                    <div class="card stat-card h-100">
-                        <div class="card-body d-flex align-items-center gap-3">
-                            <div class="stat-icon bg-danger bg-opacity-10 text-danger">
-                                <i class="bi bi-exclamation-triangle"></i>
-                            </div>
-                            <div>
-                                <div class="text-muted small">故障桩</div>
-                                <div class="fw-bold fs-5" id="ov-fault">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="row g-4 mb-4">
-                <!-- 提交请求 -->
-                <div class="col-lg-4">
-                    <div class="card section-card h-100">
-                        <div class="card-header">
-                            <i class="bi bi-plus-circle me-2 text-success"></i>提交充电请求
-                        </div>
-                        <div class="card-body">
-                            <form id="charge-form">
-                                <div class="mb-3">
-                                    <label class="form-label">充电模式</label>
-                                    <select class="form-select" id="charge-mode">
-                                        <option value="Fast">⚡ 快充 (30 kW/h)</option>
-                                        <option value="Trickle">🔋 慢充 (10 kW/h)</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">需求电量 (kWh)</label>
-                                    <input type="number" class="form-control" id="need-power" value="30" min="1" max="200" step="1">
-                                    <div class="form-text">预计充电时间：<span id="est-time">1.0</span> 小时</div>
-                                </div>
-                                <button type="submit" class="btn btn-success w-100" id="charge-submit-btn">
-                                    <i class="bi bi-send me-1"></i>提交请求
-                                </button>
-                            </form>
-                            <hr>
-                            <div class="small text-muted">
-                                <div><i class="bi bi-info-circle me-1"></i>系统自动选择等待时间最短的充电桩</div>
-                                <div class="mt-1">站点满载 (<span id="batch-threshold">35</span> 辆) 时触发批量最优调度</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 等候区 -->
-                <div class="col-lg-8">
-                    <div class="card section-card h-100">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <span><i class="bi bi-people me-2 text-primary"></i>等候区</span>
-                            <span class="badge bg-primary" id="waiting-badge">0/10</span>
-                        </div>
-                        <div class="card-body">
-                            <div class="progress progress-thin mb-3">
-                                <div class="progress-bar" id="waiting-progress" style="width:0%"></div>
-                            </div>
-                            <div id="waiting-area" style="max-height:280px;overflow-y:auto;"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 充电区 -->
-            <div class="card section-card mb-4">
-                <div class="card-header">
-                    <i class="bi bi-ev-station me-2 text-primary"></i>充电区
-                    <span class="text-muted small ms-2">3 快充桩 + 2 慢充桩</span>
-                </div>
+        <div id="main-section" style="display: none;">
+            <!-- 顶部操作栏 -->
+            <div class="card mb-4">
                 <div class="card-body">
-                    <div id="piles-grid" class="row g-3"></div>
-                </div>
-            </div>
-
-            <!-- 统计 -->
-            <div class="row g-4 mb-4">
-                <div class="col-md-4">
-                    <div class="card section-card h-100">
-                        <div class="card-header"><i class="bi bi-bar-chart me-2"></i>计费统计</div>
-                        <div class="card-body" id="billing-stats"></div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card section-card h-100">
-                        <div class="card-header"><i class="bi bi-exclamation-diamond me-2"></i>故障统计</div>
-                        <div class="card-body" id="fault-stats"></div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card section-card h-100">
-                        <div class="card-header"><i class="bi bi-journal-text me-2"></i>操作日志</div>
-                        <div class="card-body p-2" style="max-height:220px;overflow-y:auto;" id="message-log"></div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h5>欢迎，<span id="welcome-user-id"></span></h5>
+                        </div>
+                        <div class="col-md-6 text-end">
+                            <button class="btn btn-secondary me-2" onclick="logout()">退出登录</button>
+                            <button class="btn btn-warning d-none" id="toggle-admin-btn" onclick="toggleAdminMode()">进入管理员模式</button>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 详单 & 故障记录 -->
-            <div class="row g-4 mb-4">
-                <div class="col-md-7">
-                    <div class="card section-card">
-                        <div class="card-header"><i class="bi bi-receipt me-2"></i>最近充电详单</div>
-                        <div class="card-body p-0">
+            <!-- 标签页导航 -->
+            <ul class="nav nav-pills mb-4" id="main-tabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="tab-charging" data-bs-toggle="pill" data-bs-target="#pane-charging" type="button" role="tab" aria-controls="pane-charging" aria-selected="true">充电与调度</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tab-my-requests" data-bs-toggle="pill" data-bs-target="#pane-my-requests" type="button" role="tab" aria-controls="pane-my-requests" aria-selected="false">我的请求</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tab-my-details" data-bs-toggle="pill" data-bs-target="#pane-my-details" type="button" role="tab" aria-controls="pane-my-details" aria-selected="false">我的详单</button>
+                </li>
+                <li class="nav-item ms-auto d-none" role="presentation" id="admin-tab-item">
+                    <button class="nav-link" id="tab-admin" data-bs-toggle="pill" data-bs-target="#pane-admin" type="button" role="tab" aria-controls="pane-admin" aria-selected="false">管理员控制台</button>
+                </li>
+            </ul>
+
+            <!-- 标签页内容 -->
+            <div class="tab-content" id="main-tab-content">
+                <!-- 充电与调度页 -->
+                <div class="tab-pane fade show active" id="pane-charging" role="tabpanel" aria-labelledby="tab-charging">
+                    <div class="row mb-4">
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-header">提交充电请求</div>
+                                <div class="card-body">
+                                    <form id="charge-form">
+                                        <div class="mb-3">
+                                            <label class="form-label">充电模式</label>
+                                            <select class="form-select" id="charge-mode">
+                                                <option value="Fast">快充 (30kW)</option>
+                                                <option value="Trickle">慢充 (10kW)</option>
+                                            </select>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">需求电量 (kWh)</label>
+                                            <input type="number" class="form-control" id="need-power" value="30" min="1">
+                                        </div>
+                                        <button type="submit" class="btn btn-success w-100" id="submit-request-btn">提交请求</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-8">
+                            <div class="card">
+                                <div class="card-header">等候区</div>
+                                <div class="card-body waiting-area-scroll" id="waiting-area">
+                                    <p class="text-muted">暂无等候请求</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mb-4">
+                        <div class="card-header">充电区</div>
+                        <div class="card-body">
+                            <div id="piles-grid" class="row g-3"></div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-4">
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-header">充电桩统计</div>
+                                <div class="card-body" id="pile-stats"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-header">计费统计</div>
+                                <div class="card-body" id="billing-stats"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-header">故障统计</div>
+                                <div class="card-body" id="fault-stats"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 我的请求页 -->
+                <div class="tab-pane fade" id="pane-my-requests" role="tabpanel" aria-labelledby="tab-my-requests">
+                    <div class="card mb-4">
+                        <div class="card-header">我的充电请求</div>
+                        <div class="card-body" id="my-requests-list">
+                            <p class="text-muted">暂无请求</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 我的详单页 -->
+                <div class="tab-pane fade" id="pane-my-details" role="tabpanel" aria-labelledby="tab-my-details">
+                    <div class="card mb-4">
+                        <div class="card-header">我的充电详单</div>
+                        <div class="card-body">
                             <div class="table-responsive">
-                                <table class="table table-sm table-hover mb-0">
-                                    <thead class="table-light">
+                                <table class="table table-striped table-hover" id="my-details-table">
+                                    <thead>
                                         <tr>
-                                            <th>桩号</th><th>电量</th><th>时段</th>
-                                            <th>电费</th><th>服务费</th><th>合计</th>
+                                            <th>详单编号</th>
+                                            <th>充电桩编号</th>
+                                            <th>充电电量</th>
+                                            <th>启动时间</th>
+                                            <th>停止时间</th>
+                                            <th>充电费用</th>
+                                            <th>服务费用</th>
+                                            <th>总费用</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="billing-details-body">
-                                        <tr><td colspan="6" class="text-center text-muted py-3">暂无记录</td></tr>
+                                    <tbody id="my-details-tbody">
                                     </tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="col-md-5">
-                    <div class="card section-card">
-                        <div class="card-header"><i class="bi bi-tools me-2"></i>故障记录</div>
-                        <div class="card-body p-0">
+
+                <!-- 管理员控制台 -->
+                <div class="tab-pane fade" id="pane-admin" role="tabpanel" aria-labelledby="tab-admin">
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">故障调度策略</div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">选择调度模式</label>
+                                        <select class="form-select" id="fault-dispatch-mode-select">
+                                            <option value="priority">优先级调度</option>
+                                            <option value="time">时间顺序调度</option>
+                                        </select>
+                                    </div>
+                                    <button class="btn btn-primary w-100" onclick="setFaultDispatchMode()">保存设置</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">扩展调度（选做）</div>
+                                <div class="card-body">
+                                    <button class="btn btn-info w-100 mb-2" onclick="triggerMultiSpot()">单次多桩调度（总时长最短）</button>
+                                    <button class="btn btn-secondary w-100" onclick="triggerBatch()">批量调度（总时长最短）</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mb-4">
+                        <div class="card-header">用户列表</div>
+                        <div class="card-body">
                             <div class="table-responsive">
-                                <table class="table table-sm table-hover mb-0">
-                                    <thead class="table-light">
-                                        <tr><th>桩号</th><th>时间</th><th>原因</th><th>状态</th></tr>
+                                <table class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>用户名</th>
+                                            <th>角色</th>
+                                        </tr>
                                     </thead>
-                                    <tbody id="fault-details-body">
-                                        <tr><td colspan="4" class="text-center text-muted py-3">暂无记录</td></tr>
-                                    </tbody>
+                                    <tbody id="users-table-body"></tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="card mb-4">
+                        <div class="card-header">充电桩队列详细信息</div>
+                        <div class="card-body">
+                            <div id="admin-piles-detail" class="row g-3"></div>
                         </div>
                     </div>
                 </div>
@@ -343,509 +271,649 @@
         </div>
     </div>
 
-    <!-- 故障上报 Modal -->
-    <div class="modal fade" id="faultModal" tabindex="-1">
+</div>
+
+    <!-- 修改请求模态框 -->
+    <div class="modal fade" id="modify-request-modal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle text-danger me-2"></i>上报故障</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <h5 class="modal-title">修改充电请求</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <input type="hidden" id="fault-pile-id">
-                    <div class="mb-3">
-                        <label class="form-label">故障桩号</label>
-                        <input type="text" class="form-control" id="fault-pile-display" readonly>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">故障描述</label>
-                        <textarea class="form-control" id="fault-info" rows="2" placeholder="请描述故障情况"></textarea>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">重调度策略</label>
-                        <select class="form-select" id="dispatch-strategy">
-                            <option value="priority">优先级调度 — 优先分配至同类型空闲桩</option>
-                            <option value="time_seq">时间顺序调度 — 按排队号时间重新排序分配</option>
-                        </select>
-                        <div class="form-text">故障期间等候区叫号服务将暂停</div>
-                    </div>
+                    <form id="modify-request-form">
+                        <input type="hidden" id="modify-request-id">
+                        <div class="mb-3">
+                            <label class="form-label">修改类型</label>
+                            <select class="form-select" id="modify-opt-type">
+                                <option value="power">修改需求电量</option>
+                                <option value="mode">修改充电模式</option>
+                            </select>
+                        </div>
+                        <div class="mb-3" id="modify-power-div">
+                            <label class="form-label">新需求电量 (kWh)</label>
+                            <input type="number" class="form-control" id="modify-new-power" value="30" min="1">
+                        </div>
+                        <div class="mb-3" id="modify-mode-div" style="display: none;">
+                            <label class="form-label">新充电模式</label>
+                            <select class="form-select" id="modify-new-mode">
+                                <option value="Fast">快充</option>
+                                <option value="Trickle">慢充</option>
+                            </select>
+                        </div>
+                    </form>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-danger" onclick="confirmReportFault()">
-                        <i class="bi bi-exclamation-triangle me-1"></i>确认上报
-                    </button>
+                    <button type="button" class="btn btn-primary" onclick="submitModifyRequest()">保存修改</button>
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- 修改请求 Modal -->
-    <div class="modal fade" id="modifyModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-pencil-square text-primary me-2"></i>修改充电请求</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="hidden" id="modify-req-id">
-                    <div class="mb-3">
-                        <label class="form-label">排队号</label>
-                        <input type="text" class="form-control" id="modify-queue-num" readonly>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">修改类型</label>
-                        <select class="form-select" id="modify-opt-type" onchange="toggleModifyFields()">
-                            <option value="power">修改电量（保留排队号）</option>
-                            <option value="mode">修改模式（重新排队）</option>
-                        </select>
-                    </div>
-                    <div class="mb-3" id="modify-power-group">
-                        <label class="form-label">需求电量 (kWh)</label>
-                        <input type="number" class="form-control" id="modify-need-power" min="1" max="200">
-                    </div>
-                    <div class="mb-3 d-none" id="modify-mode-group">
-                        <label class="form-label">充电模式</label>
-                        <select class="form-select" id="modify-charge-mode">
-                            <option value="Fast">快充 (30 kW/h)</option>
-                            <option value="Trickle">慢充 (10 kW/h)</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmModifyRequest()">
-                        <i class="bi bi-check-lg me-1"></i>确认修改
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="toast-container"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        let currentUser = null;
-        let isSubmitting = false;
-        let isProcessing = false;
-        let faultModal, modifyModal;
-        const logEntries = [];
-
-        document.addEventListener('DOMContentLoaded', () => {
-            faultModal = new bootstrap.Modal(document.getElementById('faultModal'));
-            modifyModal = new bootstrap.Modal(document.getElementById('modifyModal'));
+        document.addEventListener('DOMContentLoaded', function() {
             refreshUserStatus();
             setInterval(refreshData, 3000);
-
-            document.getElementById('charge-mode').addEventListener('change', updateEstTime);
-            document.getElementById('need-power').addEventListener('input', updateEstTime);
-            updateEstTime();
         });
 
-        function updateEstTime() {
-            const mode = document.getElementById('charge-mode').value;
-            const power = parseFloat(document.getElementById('need-power').value) || 0;
-            const rate = mode === 'Fast' ? 30 : 10;
-            document.getElementById('est-time').textContent = (power / rate).toFixed(1);
-        }
+        let currentUserId = null;
+        let isSubmitting = false;
+        let isProcessing = false;
+        let isAdminMode = false;
 
-        function showToast(msg, type = 'info') {
-            const colors = { success: 'bg-success', error: 'bg-danger', info: 'bg-primary', warning: 'bg-warning text-dark' };
-            const icons = { success: 'check-circle', error: 'x-circle', info: 'info-circle', warning: 'exclamation-triangle' };
-            const el = document.createElement('div');
-            el.className = `toast show align-items-center text-white ${colors[type] || colors.info} border-0`;
-            el.setAttribute('role', 'alert');
-            el.innerHTML = `<div class="d-flex"><div class="toast-body"><i class="bi bi-${icons[type] || icons.info} me-2"></i>${msg}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest('.toast').remove()"></button></div>`;
-            document.getElementById('toast-container').appendChild(el);
-            setTimeout(() => el.remove(), 4000);
-        }
+        const modifyRequestModal = new bootstrap.Modal(document.getElementById('modify-request-modal'));
 
         function showMessage(msg, type = 'info') {
-            showToast(msg, type);
-            logEntries.unshift({ time: new Date().toLocaleTimeString(), msg, type });
-            if (logEntries.length > 50) logEntries.pop();
             const logDiv = document.getElementById('message-log');
-            if (logDiv) {
-                logDiv.innerHTML = logEntries.map(e => {
-                    const cls = e.type === 'error' ? 'text-danger' : e.type === 'success' ? 'text-success' : 'text-muted';
-                    return `<div class="log-entry"><span class="log-time">${e.time}</span><span class="${cls}">${e.msg}</span></div>`;
-                }).join('');
-            }
-        }
-
-        function statusBadge(status) {
-            const map = {
-                Available: ['badge-available', '空闲'],
-                Charging: ['badge-charging', '充电中'],
-                Fault: ['badge-fault', '故障']
-            };
-            const [cls, label] = map[status] || ['bg-secondary', status];
-            return `<span class="badge ${cls}">${label}</span>`;
-        }
-
-        function modeLabel(mode) {
-            return mode === 'Fast' ? '⚡ 快充' : '🔋 慢充';
+            const alertClass = type === 'error' ? 'alert-danger' : type === 'success' ? 'alert-success' : 'alert-info';
+            logDiv.className = `alert ${alertClass}`;
+            logDiv.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
         }
 
         async function refreshUserStatus() {
             try {
-                const res = await fetch('/api/user/status');
-                updateUIByStatus(await res.json());
-            } catch (e) { console.error(e); }
+                const response = await fetch('/api/user/status');
+                const data = await response.json();
+                updateUIByStatus(data);
+            } catch (error) {
+                console.error(error);
+            }
         }
 
         function updateUIByStatus(data) {
-            const loginSec = document.getElementById('login-section');
-            const mainSec = document.getElementById('main-section');
-            const userInfo = document.getElementById('user-info');
+            const loginSection = document.getElementById('login-section');
+            const mainSection = document.getElementById('main-section');
+            const userInfoDiv = document.getElementById('user-info');
+            const adminBtn = document.getElementById('toggle-admin-btn');
+
             if (data.logged_in) {
-                currentUser = data.user_id;
-                loginSec.style.display = 'none';
-                mainSec.style.display = 'block';
-                userInfo.innerHTML = `<span class="text-white me-2"><i class="bi bi-person-circle me-1"></i>${data.user_id}</span><button class="btn btn-sm btn-outline-light" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出</button>`;
+                currentUserId = data.user_id;
+                loginSection.style.display = 'none';
+                mainSection.style.display = 'block';
+                document.getElementById('welcome-user-id').textContent = currentUserId;
+                userInfoDiv.innerHTML = `<span class="nav-link">用户: ${currentUserId} (${data.role === 'admin' ? '管理员' : '普通用户'})</span>`;
+                
+                if (data.role === 'admin') {
+                    adminBtn.classList.remove('d-none');
+                } else {
+                    adminBtn.classList.add('d-none');
+                }
+                
                 refreshData();
             } else {
-                loginSec.style.display = 'block';
-                mainSec.style.display = 'none';
-                userInfo.innerHTML = '<span class="nav-link text-white mb-0">未登录</span>';
+                currentUserId = null;
+                loginSection.style.display = 'block';
+                mainSection.style.display = 'none';
+                userInfoDiv.innerHTML = '<span class="nav-link">未登录</span>';
+                adminBtn.classList.add('d-none');
             }
         }
 
         async function refreshData() {
-            if (!currentUser) return;
             await Promise.all([
-                refreshOverview(),
                 refreshWaitingArea(),
                 refreshChargingArea(),
+                refreshPileStats(),
                 refreshBillingStats(),
                 refreshFaultStats(),
-                refreshBillingDetails(),
-                refreshFaultDetails()
+                refreshMyRequests(),
+                refreshMyDetails(),
+                refreshAdminPilesDetail(),
+                refreshUsers()
             ]);
         }
 
-        async function refreshOverview() {
-            try {
-                const data = await (await fetch('/api/system/overview')).json();
-                document.getElementById('ov-waiting').textContent = `${data.waiting_count}/${data.waiting_capacity}`;
-                document.getElementById('ov-available').textContent = data.available_piles;
-                document.getElementById('ov-charging').textContent = data.charging_piles;
-                document.getElementById('ov-fault').textContent = data.fault_piles;
-                document.getElementById('batch-threshold').textContent = data.batch_threshold;
-
-                const badge = document.getElementById('call-paused-badge');
-                badge.classList.toggle('d-none', !data.is_call_paused);
-
-                document.getElementById('waiting-badge').textContent = `${data.waiting_count}/${data.waiting_capacity}`;
-                const pct = data.waiting_capacity > 0 ? (data.waiting_count / data.waiting_capacity * 100) : 0;
-                const bar = document.getElementById('waiting-progress');
-                bar.style.width = pct + '%';
-                bar.className = 'progress-bar' + (pct >= 80 ? ' bg-danger' : pct >= 50 ? ' bg-warning' : ' bg-primary');
-            } catch (e) { console.error(e); }
-        }
-
-        document.getElementById('login-form').addEventListener('submit', async e => {
+        // ========== 登录/注册 ==========
+        document.getElementById('login-form').addEventListener('submit', async function(e) {
             e.preventDefault();
+            const userId = document.getElementById('login-user-id').value;
+            const password = document.getElementById('login-password').value;
+            
             try {
-                const res = await fetch('/api/login', {
+                const response = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: document.getElementById('login-user-id').value,
-                        password: document.getElementById('login-password').value
-                    })
+                    body: JSON.stringify({ user_id: userId, password: password })
                 });
-                const data = await res.json();
-                data.success ? (showMessage(data.message, 'success'), refreshUserStatus()) : showMessage(data.message, 'error');
-            } catch (e) { showMessage('登录失败: ' + e, 'error'); }
+                
+                const data = await response.json();
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    refreshUserStatus();
+                } else {
+                    showMessage(data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('登录失败: ' + error, 'error');
+            }
         });
 
-        document.getElementById('register-form').addEventListener('submit', async e => {
+        document.getElementById('register-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             const userId = document.getElementById('register-user-id').value.trim();
             const password = document.getElementById('register-password').value.trim();
-            const battery = parseFloat(document.getElementById('register-battery').value);
-            if (!userId || !password) return showMessage('用户名和密码不能为空', 'error');
+            const role = document.getElementById('register-role').value;
+            
+            if (!userId || !password) {
+                showMessage('用户名和密码不能为空', 'error');
+                return;
+            }
+            
             try {
-                const res = await fetch('/api/register', {
+                const response = await fetch('/api/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: userId, password, battery_capacity: battery })
+                    body: JSON.stringify({ user_id: userId, password: password, role: role })
                 });
-                const data = await res.json();
+                
+                const data = await response.json();
                 if (data.success) {
                     document.getElementById('register-user-id').value = '';
                     document.getElementById('register-password').value = '';
                     document.getElementById('login-user-id').value = userId;
                     showMessage(data.message, 'success');
-                } else showMessage(data.message, 'error');
-            } catch (e) { showMessage('注册失败: ' + e, 'error'); }
-        });
-
-        async function logout() {
-            await fetch('/api/logout', { method: 'POST' });
-            currentUser = null;
-            refreshUserStatus();
-            showMessage('已退出登录', 'success');
-        }
-
-        document.getElementById('charge-form').addEventListener('submit', async e => {
-            e.preventDefault();
-            if (isSubmitting) return;
-            isSubmitting = true;
-            const btn = document.getElementById('charge-submit-btn');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>提交中...';
-            try {
-                const res = await fetch('/api/charge/request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        charge_mode: document.getElementById('charge-mode').value,
-                        need_power: parseFloat(document.getElementById('need-power').value)
-                    })
-                });
-                const data = await res.json();
-                showMessage(data.message + (data.request_id ? ` (ID: ${data.request_id})` : ''), data.success ? 'success' : 'error');
-                await refreshData();
-            } catch (e) { showMessage('请求失败: ' + e, 'error'); }
-            finally {
-                isSubmitting = false;
-                btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-send me-1"></i>提交请求';
+                } else {
+                    showMessage(data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('注册失败: ' + error, 'error');
             }
         });
 
+        async function logout() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+                isAdminMode = false;
+                refreshUserStatus();
+                showMessage('已退出登录', 'success');
+            } catch (error) {
+                showMessage('退出失败: ' + error, 'error');
+            }
+        }
+
+        // ========== 提交充电请求 ==========
+        document.getElementById('charge-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (isSubmitting) {
+                showMessage('正在处理中，请稍候...', 'info');
+                return;
+            }
+            
+            const chargeMode = document.getElementById('charge-mode').value;
+            const needPower = parseFloat(document.getElementById('need-power').value);
+            
+            isSubmitting = true;
+            const btn = document.getElementById('submit-request-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '提交中...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/charge/request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ charge_mode: chargeMode, need_power: needPower })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    await Promise.all([refreshWaitingArea(), refreshChargingArea()]);
+                } else {
+                    showMessage(data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('请求失败: ' + error, 'error');
+            } finally {
+                isSubmitting = false;
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        });
+
+        // ========== 修改请求相关 ==========
+        document.getElementById('modify-opt-type').addEventListener('change', function() {
+            const optType = this.value;
+            document.getElementById('modify-power-div').style.display = optType === 'power' ? 'block' : 'none';
+            document.getElementById('modify-mode-div').style.display = optType === 'mode' ? 'block' : 'none';
+        });
+
+        function openModifyModal(requestId, currentMode, currentPower, canModifyMode) {
+            document.getElementById('modify-request-id').value = requestId;
+            document.getElementById('modify-new-power').value = currentPower;
+            document.getElementById('modify-new-mode').value = currentMode;
+            
+            const optSelect = document.getElementById('modify-opt-type');
+            if (!canModifyMode) {
+                optSelect.innerHTML = '<option value="power">修改需求电量</option>';
+            } else {
+                optSelect.innerHTML = '<option value="power">修改需求电量</option><option value="mode">修改充电模式</option>';
+            }
+            document.getElementById('modify-opt-type').dispatchEvent(new Event('change'));
+            modifyRequestModal.show();
+        }
+
+        async function submitModifyRequest() {
+            const reqId = document.getElementById('modify-request-id').value;
+            const optType = document.getElementById('modify-opt-type').value;
+            const newMode = document.getElementById('modify-new-mode').value;
+            const newPower = parseFloat(document.getElementById('modify-new-power').value);
+
+            try {
+                const response = await fetch(`/api/request/${reqId}/modify`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ opt_type: optType, charge_mode: newMode, need_power: newPower })
+                });
+
+                const data = await response.json();
+                showMessage(data.message, 'success');
+                modifyRequestModal.hide();
+                refreshData();
+            } catch (error) {
+                showMessage('修改失败: ' + error, 'error');
+            }
+        }
+
+        // ========== 等候区/充电区刷新 ==========
         async function refreshWaitingArea() {
             try {
-                const data = await (await fetch('/api/waiting-area')).json();
-                const div = document.getElementById('waiting-area');
-                if (!data.requests.length) {
-                    div.innerHTML = '<p class="text-muted text-center py-4"><i class="bi bi-inbox fs-3 d-block mb-2"></i>暂无等候请求</p>';
-                    return;
+                const response = await fetch('/api/waiting-area');
+                const data = await response.json();
+                const waitingDiv = document.getElementById('waiting-area');
+                
+                if (data.requests.length === 0) {
+                    waitingDiv.innerHTML = '<p class="text-muted">暂无等候请求</p>';
+                } else {
+                    waitingDiv.innerHTML = data.requests.map(req => `
+                        <div class="alert alert-info d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <strong>${req.queue_number}</strong> - 用户: ${req.user_id} - 模式: ${req.charge_mode} - 电量: ${req.need_power}kWh
+                            </div>
+                            <div>
+                                ${req.user_id === currentUserId ? `
+                                    <button class="btn btn-sm btn-outline-primary me-1" onclick="openModifyModal('${req.request_id}', '${req.charge_mode}', ${req.need_power}, true)">修改</button>
+                                    <button class="btn btn-sm btn-danger" onclick="cancelRequest('${req.request_id}')">取消</button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `).join('');
                 }
-                div.innerHTML = data.requests.map(req => {
-                    const isMine = req.user_id === currentUser;
-                    const actions = isMine ? `
-                        <div class="btn-group btn-group-sm">
-                            <button class="btn btn-outline-primary" onclick="openModifyModal('${req.request_id}','${req.queue_number}','${req.charge_mode}',${req.need_power})"><i class="bi bi-pencil"></i></button>
-                            <button class="btn btn-outline-danger" onclick="cancelRequest('${req.request_id}')"><i class="bi bi-x-lg"></i></button>
-                        </div>` : '';
-                    return `<div class="queue-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <span class="badge bg-dark me-2">${req.queue_number}</span>
-                            <strong>${req.user_id}</strong>
-                            <span class="text-muted ms-2">${modeLabel(req.charge_mode)} · ${req.need_power} kWh</span>
-                            ${isMine ? '<span class="badge bg-info ms-1">我的</span>' : ''}
-                        </div>${actions}
-                    </div>`;
-                }).join('');
-            } catch (e) { console.error(e); }
+            } catch (error) {
+                console.error(error);
+            }
         }
 
         async function refreshChargingArea() {
             try {
-                const data = await (await fetch('/api/charging-area')).json();
-                document.getElementById('piles-grid').innerHTML = data.piles.map(pile => {
-                    const queueHtml = pile.queue.length
-                        ? pile.queue.map(q => `<div class="queue-item"><span class="badge bg-secondary me-1">${q.queue_number}</span>${q.user_id} · ${q.need_power}kWh</div>`).join('')
-                        : '<div class="text-muted small">排队为空</div>';
-
-                    const currentHtml = pile.current_charging
-                        ? `<div class="alert alert-primary py-2 px-3 mb-2 small">
-                            <i class="bi bi-lightning-charge me-1"></i>
-                            <strong>${pile.current_charging.queue_number}</strong> ${pile.current_charging.user_id} · ${pile.current_charging.need_power}kWh
-                           </div>` : '';
-
-                    const actions = `
-                        <div class="d-flex gap-1 flex-wrap mt-2">
-                            ${pile.status === 'Charging' ? `<button class="btn btn-warning btn-sm flex-fill" onclick="finishCharge('${pile.pile_id}')"><i class="bi bi-check-lg"></i> 完成</button>` : ''}
-                            ${pile.status !== 'Fault'
-                                ? `<button class="btn btn-danger btn-sm flex-fill" onclick="openFaultModal('${pile.pile_id}')"><i class="bi bi-exclamation-triangle"></i> 故障</button>`
-                                : `<button class="btn btn-success btn-sm flex-fill" onclick="resolveFault('${pile.pile_id}')"><i class="bi bi-wrench"></i> 修复</button>`}
-                        </div>`;
-
-                    return `<div class="col-md-6 col-lg-4">
-                        <div class="card pile-card status-${pile.status.toLowerCase()} h-100">
+                const response = await fetch('/api/charging-area');
+                const data = await response.json();
+                const gridDiv = document.getElementById('piles-grid');
+                
+                gridDiv.innerHTML = data.piles.map(pile => `
+                    <div class="col-md-4">
+                        <div class="card pile-card status-${pile.status.toLowerCase()}">
                             <div class="card-body">
-                                <div class="d-flex justify-content-between align-items-start mb-2">
-                                    <div>
-                                        <h5 class="card-title mb-0">${pile.pile_id}</h5>
-                                        <small class="text-muted">${pile.pile_type} · ${pile.power} kW/h</small>
+                                <h5 class="card-title">${pile.pile_id} (${pile.pile_type})</h5>
+                                <p class="card-text">状态: ${pile.status}</p>
+                                <p class="card-text">充电次数: ${pile.total_charge_count}</p>
+                                <p class="card-text">总电量: ${pile.total_charge_power.toFixed(1)}kWh</p>
+                                <div class="mb-2">
+                                    <strong>队列 (${pile.queue.length}/${pile.max_queue_length}):</strong>
+                                    <div class="small">
+                                        ${pile.queue.map(q => `<span class="badge bg-secondary me-1">${q.queue_number}</span>`).join('') || '空'}
                                     </div>
-                                    ${statusBadge(pile.status)}
                                 </div>
-                                ${currentHtml}
-                                <div class="small text-muted mb-1">排队 (${pile.queue_length}/${pile.max_queue_length})</div>
-                                <div style="max-height:80px;overflow-y:auto;">${queueHtml}</div>
-                                <div class="mt-2 small text-muted">
-                                    累计 ${pile.total_charge_count} 次 · ${pile.total_charge_power} kWh
+                                <div class="btn-group w-100">
+                                    ${pile.status === 'Charging' ? `
+                                        <button class="btn btn-warning btn-sm" onclick="finishCharge('${pile.pile_id}')">完成充电</button>
+                                    ` : ''}
+                                    ${pile.status !== 'Fault' ? `
+                                        <button class="btn btn-danger btn-sm" onclick="reportFault('${pile.pile_id}')">上报故障</button>
+                                    ` : `
+                                        <button class="btn btn-success btn-sm" onclick="resolveFault('${pile.pile_id}')">修复故障</button>
+                                    `}
                                 </div>
-                                ${actions}
                             </div>
                         </div>
-                    </div>`;
-                }).join('');
-            } catch (e) { console.error(e); }
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        // ========== 统计刷新 ==========
+        async function refreshPileStats() {
+            try {
+                const response = await fetch('/api/stats/piles');
+                const data = await response.json();
+                const statsDiv = document.getElementById('pile-stats');
+                let statsHtml = '';
+                for (const pile of data.piles) {
+                    statsHtml += `
+                        <div class="mb-2">
+                            <strong>${pile.pile_id}:</strong> ${pile.total_charge_count}次, ${pile.total_charge_power.toFixed(1)}kWh
+                        </div>
+                    `;
+                }
+                statsDiv.innerHTML = statsHtml;
+            } catch (error) {
+                console.error(error);
+            }
         }
 
         async function refreshBillingStats() {
             try {
-                const d = await (await fetch('/api/stats/billing')).json();
-                document.getElementById('billing-stats').innerHTML = `
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">总交易数</span><strong>${d.total_transactions}</strong></div>
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">总充电量</span><strong>${d.total_energy.toFixed(1)} kWh</strong></div>
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">电费合计</span><span>${d.total_charging_fee.toFixed(2)} 元</span></div>
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">服务费合计</span><span>${d.total_service_fee.toFixed(2)} 元</span></div>
-                    <hr class="my-2">
-                    <div class="d-flex justify-content-between"><span class="fw-bold">总费用</span><strong class="text-primary fs-5">${d.total_fee.toFixed(2)} 元</strong></div>`;
-            } catch (e) { console.error(e); }
+                const response = await fetch('/api/stats/billing');
+                const data = await response.json();
+                const statsDiv = document.getElementById('billing-stats');
+                statsDiv.innerHTML = `
+                    <p>总交易数: ${data.total_transactions}</p>
+                    <p>总充电电量: ${data.total_energy.toFixed(1)}kWh</p>
+                    <p>总费用: ${data.total_fee.toFixed(2)}元</p>
+                `;
+            } catch (error) {
+                console.error(error);
+            }
         }
 
         async function refreshFaultStats() {
             try {
-                const d = await (await fetch('/api/stats/faults')).json();
-                document.getElementById('fault-stats').innerHTML = `
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">总故障数</span><strong>${d.total_faults}</strong></div>
-                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">未解决</span><span class="text-danger fw-bold">${d.unresolved}</span></div>
-                    <div class="d-flex justify-content-between"><span class="text-muted">已解决</span><span class="text-success">${d.resolved}</span></div>`;
-            } catch (e) { console.error(e); }
+                const response = await fetch('/api/stats/faults');
+                const data = await response.json();
+                const statsDiv = document.getElementById('fault-stats');
+                statsDiv.innerHTML = `
+                    <p>总故障数: ${data.total_faults}</p>
+                    <p>未解决: ${data.unresolved}</p>
+                    <p>已解决: ${data.resolved}</p>
+                `;
+            } catch (error) {
+                console.error(error);
+            }
         }
 
-        async function refreshBillingDetails() {
+        // ========== 我的请求和详单 ==========
+        async function refreshMyRequests() {
+            const div = document.getElementById('my-requests-list');
+            if (!currentUserId) {
+                div.innerHTML = '<p class="text-muted">请先登录</p>';
+                return;
+            }
             try {
-                const data = await (await fetch('/api/stats/billing/details')).json();
-                const tbody = document.getElementById('billing-details-body');
-                if (!data.details.length) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">暂无记录</td></tr>';
-                    return;
+                const response = await fetch('/api/user/requests');
+                const data = await response.json();
+                if (data.requests.length === 0) {
+                    div.innerHTML = '<p class="text-muted">暂无请求</p>';
+                } else {
+                    div.innerHTML = data.requests.map(req => `
+                        <div class="alert alert-secondary d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <strong>${req.queue_number || 'N/A'}</strong> - 模式: ${req.charge_mode} - 电量: ${req.need_power}kWh - 状态: ${req.status}
+                            </div>
+                            <div>
+                                ${req.status === 'Waiting' ? `
+                                    <button class="btn btn-sm btn-outline-primary me-1" onclick="openModifyModal('${req.request_id}', '${req.charge_mode}', ${req.need_power}, true)">修改</button>
+                                ` : ''}
+                                ${['Waiting', 'Charging'].includes(req.status) ? `
+                                    <button class="btn btn-sm btn-danger" onclick="cancelRequest('${req.request_id}')">取消</button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `).join('');
                 }
-                tbody.innerHTML = data.details.map(d => `<tr>
-                    <td><strong>${d.pile_id}</strong></td>
-                    <td>${d.energy_amount} kWh</td>
-                    <td class="small">${d.start_time}<br>${d.stop_time}</td>
-                    <td>${d.charging_fee}</td><td>${d.service_fee}</td>
-                    <td><strong>${d.total_fee}</strong></td>
-                </tr>`).join('');
-            } catch (e) { console.error(e); }
+            } catch (error) {
+                console.error(error);
+            }
         }
 
-        async function refreshFaultDetails() {
+        async function refreshMyDetails() {
+            const tbody = document.getElementById('my-details-tbody');
+            if (!currentUserId) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">请先登录</td></tr>';
+                return;
+            }
             try {
-                const data = await (await fetch('/api/stats/faults/details')).json();
-                const tbody = document.getElementById('fault-details-body');
-                if (!data.records.length) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">暂无记录</td></tr>';
-                    return;
+                const response = await fetch('/api/user/details');
+                const data = await response.json();
+                if (data.details.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">暂无详单</td></tr>';
+                } else {
+                    tbody.innerHTML = data.details.map(d => `
+                        <tr>
+                            <td>${d.detail_id}</td>
+                            <td>${d.pile_id}</td>
+                            <td>${d.energy_amount.toFixed(2)}kWh</td>
+                            <td>${new Date(d.start_time).toLocaleString()}</td>
+                            <td>${new Date(d.stop_time).toLocaleString()}</td>
+                            <td>${d.charging_fee.toFixed(2)}元</td>
+                            <td>${d.service_fee.toFixed(2)}元</td>
+                            <td>${d.total_fee.toFixed(2)}元</td>
+                        </tr>
+                    `).join('');
                 }
-                tbody.innerHTML = data.records.map(r => `<tr>
-                    <td><strong>${r.pile_id}</strong></td>
-                    <td class="small">${r.fault_time}</td>
-                    <td class="small">${r.fault_reason}</td>
-                    <td>${r.is_resolved ? '<span class="badge bg-success">已修复</span>' : '<span class="badge bg-danger">未修复</span>'}</td>
-                </tr>`).join('');
-            } catch (e) { console.error(e); }
+            } catch (error) {
+                console.error(error);
+            }
         }
 
+        // ========== 管理员功能 ==========
+        function toggleAdminMode() {
+            const btn = document.getElementById('toggle-admin-btn');
+            const adminTabItem = document.getElementById('admin-tab-item');
+
+            if (isAdminMode) {
+                btn.textContent = '进入管理员模式';
+                btn.className = 'btn btn-warning';
+                adminTabItem.classList.add('d-none');
+                document.getElementById('tab-charging').classList.add('active');
+                document.getElementById('pane-charging').classList.add('show', 'active');
+                document.getElementById('tab-admin').classList.remove('active');
+                document.getElementById('pane-admin').classList.remove('show', 'active');
+                isAdminMode = false;
+                showMessage('已退出管理员模式', 'info');
+            } else {
+                btn.textContent = '退出管理员模式';
+                btn.className = 'btn btn-danger';
+                adminTabItem.classList.remove('d-none');
+                isAdminMode = true;
+                showMessage('已进入管理员模式', 'success');
+                refreshFaultModeSelect();
+            }
+        }
+
+        async function refreshFaultModeSelect() {
+            try {
+                const resp = await fetch('/api/system/fault-mode');
+                const data = await resp.json();
+                document.getElementById('fault-dispatch-mode-select').value = data.mode;
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        async function setFaultDispatchMode() {
+            const mode = document.getElementById('fault-dispatch-mode-select').value;
+            try {
+                await fetch('/api/system/fault-mode', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: mode })
+                });
+                showMessage('调度模式已更新', 'success');
+            } catch (error) {
+                showMessage('更新失败: ' + error, 'error');
+            }
+        }
+
+        async function triggerMultiSpot() {
+            try {
+                await fetch('/api/system/trigger-multispot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ charge_mode: 'Fast', count: 2 })
+                });
+                showMessage('单次多桩调度已执行', 'success');
+                refreshData();
+            } catch (error) {
+                showMessage('执行失败: ' + error, 'error');
+            }
+        }
+
+        async function triggerBatch() {
+            try {
+                await fetch('/api/system/trigger-batch', { method: 'POST' });
+                showMessage('批量调度已执行', 'success');
+                refreshData();
+            } catch (error) {
+                showMessage('执行失败: ' + error, 'error');
+            }
+        }
+
+        async function refreshAdminPilesDetail() {
+            const div = document.getElementById('admin-piles-detail');
+            if (!isAdminMode) return;
+            try {
+                const response = await fetch('/api/charging-area');
+                const data = await response.json();
+                div.innerHTML = data.piles.map(pile => `
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">${pile.pile_id}</div>
+                            <div class="card-body small">
+                                <p><strong>状态:</strong> ${pile.status}</p>
+                                <p><strong>当前充电:</strong> ${pile.current_charging ? pile.current_charging.user_id + ' (' + pile.current_charging.queue_number + ')' : '无'}</p>
+                                <p><strong>队列车辆:</strong></p>
+                                <div>
+                                    ${pile.queue.map(q => `
+                                        <div class="queue-item">
+                                            ${q.user_id} - ${q.charge_mode} - ${q.need_power}kWh - ${q.queue_number}
+                                        </div>
+                                    `).join('') || '<span class="text-muted">无</span>'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        async function refreshUsers() {
+            const tbody = document.getElementById('users-table-body');
+            if (!isAdminMode) {
+                tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">需要管理员权限</td></tr>';
+                return;
+            }
+            try {
+                const response = await fetch('/api/users');
+                const data = await response.json();
+                if (data.success) {
+                    tbody.innerHTML = data.users.map(user => `
+                        <tr>
+                            <td>${user.user_id}</td>
+                            <td>${user.role === 'admin' ? '管理员' : '普通用户'}</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        // ========== 通用操作 ==========
         async function cancelRequest(reqId) {
-            if (isProcessing || !confirm('确定取消该充电请求？')) return;
+            if (isProcessing) return;
             isProcessing = true;
             try {
-                const data = await (await fetch(`/api/request/${reqId}/cancel`, { method: 'POST' })).json();
+                const response = await fetch(`/api/request/${reqId}/cancel`, { method: 'POST' });
+                const data = await response.json();
                 showMessage(data.message, 'success');
-                await refreshData();
-            } catch (e) { showMessage('取消失败: ' + e, 'error'); }
-            finally { isProcessing = false; }
+                await Promise.all([refreshWaitingArea(), refreshChargingArea()]);
+            } catch (error) {
+                showMessage('取消失败: ' + error, 'error');
+            } finally {
+                isProcessing = false;
+            }
         }
 
         async function finishCharge(pileId) {
             if (isProcessing) return;
             isProcessing = true;
             try {
-                const data = await (await fetch(`/api/pile/${pileId}/finish`, { method: 'POST' })).json();
+                const response = await fetch(`/api/pile/${pileId}/finish`, { method: 'POST' });
+                const data = await response.json();
                 showMessage(data.message, 'success');
                 await refreshData();
-            } catch (e) { showMessage('操作失败: ' + e, 'error'); }
-            finally { isProcessing = false; }
+            } catch (error) {
+                showMessage('操作失败: ' + error, 'error');
+            } finally {
+                isProcessing = false;
+            }
         }
 
-        function openFaultModal(pileId) {
-            document.getElementById('fault-pile-id').value = pileId;
-            document.getElementById('fault-pile-display').value = pileId;
-            document.getElementById('fault-info').value = '';
-            document.getElementById('dispatch-strategy').value = 'priority';
-            faultModal.show();
-        }
-
-        async function confirmReportFault() {
-            const pileId = document.getElementById('fault-pile-id').value;
-            const faultInfo = document.getElementById('fault-info').value.trim() || '未知故障';
-            const strategy = document.getElementById('dispatch-strategy').value;
+        async function reportFault(pileId) {
             if (isProcessing) return;
-            isProcessing = true;
             try {
-                const data = await (await fetch(`/api/pile/${pileId}/fault`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fault_info: faultInfo, dispatch_strategy: strategy })
-                })).json();
-                faultModal.hide();
-                const strategyName = strategy === 'time_seq' ? '时间顺序调度' : '优先级调度';
-                showMessage(`${data.message}（${strategyName}）`, 'success');
-                await refreshData();
-            } catch (e) { showMessage('操作失败: ' + e, 'error'); }
-            finally { isProcessing = false; }
+                const faultInfo = prompt('请输入故障信息:');
+                if (faultInfo) {
+                    isProcessing = true;
+                    const modeResp = await fetch('/api/system/fault-mode');
+                    const modeData = await modeResp.json();
+                    const response = await fetch(`/api/pile/${pileId}/fault`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fault_info: faultInfo, dispatch_strategy: modeData.mode })
+                    });
+                    const data = await response.json();
+                    showMessage(data.message, 'success');
+                    await refreshData();
+                }
+            } catch (error) {
+                showMessage('操作失败: ' + error, 'error');
+            } finally {
+                isProcessing = false;
+            }
         }
 
         async function resolveFault(pileId) {
             if (isProcessing) return;
             isProcessing = true;
             try {
-                const data = await (await fetch(`/api/pile/${pileId}/resolve-fault`, { method: 'POST' })).json();
-                showMessage(data.message + '（已执行故障恢复调度）', 'success');
-                await refreshData();
-            } catch (e) { showMessage('操作失败: ' + e, 'error'); }
-            finally { isProcessing = false; }
-        }
-
-        function openModifyModal(reqId, queueNum, mode, power) {
-            document.getElementById('modify-req-id').value = reqId;
-            document.getElementById('modify-queue-num').value = queueNum;
-            document.getElementById('modify-need-power').value = power;
-            document.getElementById('modify-charge-mode').value = mode;
-            document.getElementById('modify-opt-type').value = 'power';
-            toggleModifyFields();
-            modifyModal.show();
-        }
-
-        function toggleModifyFields() {
-            const optType = document.getElementById('modify-opt-type').value;
-            document.getElementById('modify-power-group').classList.toggle('d-none', optType === 'mode');
-            document.getElementById('modify-mode-group').classList.toggle('d-none', optType !== 'mode');
-        }
-
-        async function confirmModifyRequest() {
-            const reqId = document.getElementById('modify-req-id').value;
-            const optType = document.getElementById('modify-opt-type').value;
-            if (isProcessing) return;
-            isProcessing = true;
-            try {
-                const data = await (await fetch(`/api/request/${reqId}/modify`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        opt_type: optType,
-                        charge_mode: document.getElementById('modify-charge-mode').value,
-                        need_power: parseFloat(document.getElementById('modify-need-power').value)
-                    })
-                })).json();
-                modifyModal.hide();
+                const response = await fetch(`/api/pile/${pileId}/resolve-fault`, { method: 'POST' });
+                const data = await response.json();
                 showMessage(data.message, 'success');
-                await refreshData();
-            } catch (e) { showMessage('修改失败: ' + e, 'error'); }
-            finally { isProcessing = false; }
+                await Promise.all([refreshChargingArea(), refreshFaultStats()]);
+            } catch (error) {
+                showMessage('操作失败: ' + error, 'error');
+            } finally {
+                isProcessing = false;
+            }
         }
     </script>
 </body>

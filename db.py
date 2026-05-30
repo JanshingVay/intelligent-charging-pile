@@ -23,7 +23,8 @@ def init_db():
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
-            password TEXT NOT NULL
+            password TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user'
         );
 
         CREATE TABLE IF NOT EXISTS pile_stats (
@@ -35,6 +36,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS charging_details (
             detail_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
             pile_id TEXT NOT NULL,
             energy_amount REAL NOT NULL,
             start_time TEXT NOT NULL,
@@ -58,6 +60,11 @@ def init_db():
         );
     ''')
     conn.commit()
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     conn.close()
 
 
@@ -66,17 +73,24 @@ def ensure_default_users():
     existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if existing == 0:
         conn.executemany(
-            "INSERT OR IGNORE INTO users (user_id, password) VALUES (?, ?)",
-            [("user1", "123456"), ("user2", "123456"), ("user3", "123456")]
+            "INSERT OR IGNORE INTO users (user_id, password, role) VALUES (?, ?, ?)",
+            [
+                ("user1", "123456", "admin"),
+                ("user2", "123456", "user"),
+                ("user3", "123456", "user"),
+            ]
         )
         conn.commit()
     conn.close()
 
 
-def register_user(user_id, password):
+def register_user(user_id, password, role='user'):
     conn = get_conn()
     try:
-        conn.execute("INSERT INTO users (user_id, password) VALUES (?, ?)", (user_id, password))
+        conn.execute(
+            "INSERT INTO users (user_id, password, role) VALUES (?, ?, ?)",
+            (user_id, password, role)
+        )
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -88,12 +102,26 @@ def register_user(user_id, password):
 def verify_user(user_id, password):
     conn = get_conn()
     row = conn.execute(
-        "SELECT password FROM users WHERE user_id = ?", (user_id,)
+        "SELECT password, role FROM users WHERE user_id = ?", (user_id,)
     ).fetchone()
     conn.close()
-    if row:
-        return row["password"] == password
-    return False
+    if row and row["password"] == password:
+        return {"valid": True, "role": row["role"]}
+    return {"valid": False, "role": None}
+
+
+def get_user_role(user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row["role"] if row else None
+
+
+def get_all_users():
+    conn = get_conn()
+    rows = conn.execute("SELECT user_id, role FROM users ORDER BY user_id").fetchall()
+    conn.close()
+    return [{"user_id": row["user_id"], "role": row["role"]} for row in rows]
 
 
 def user_exists(user_id):
@@ -146,14 +174,14 @@ def save_pile_stats(pile_id, total_charge_count, total_charge_duration, total_ch
     conn.close()
 
 
-def save_charging_detail(detail):
+def save_charging_detail(detail, user_id=None):
     conn = get_conn()
     conn.execute(
         '''INSERT INTO charging_details 
-           (detail_id, pile_id, energy_amount, start_time, stop_time, 
+           (detail_id, user_id, pile_id, energy_amount, start_time, stop_time, 
             charging_fee, service_fee, total_fee)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-        (detail.detailId, detail.pileId, detail.energyAmount,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (detail.detailId, user_id if user_id else 'unknown', detail.pileId, detail.energyAmount,
          detail.startTime.isoformat(), detail.stopTime.isoformat(),
          detail.chargingFee, detail.serviceFee, detail.totalFee)
     )
@@ -161,11 +189,21 @@ def save_charging_detail(detail):
     conn.close()
 
 
-def load_charging_details():
+def load_charging_details(user_id=None):
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM charging_details ORDER BY stop_time DESC").fetchall()
+    if user_id:
+        rows = conn.execute("SELECT * FROM charging_details WHERE user_id = ? ORDER BY stop_time DESC", (user_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM charging_details ORDER BY stop_time DESC").fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_pile_queue_info(pile_id):
+    """获取指定充电桩的排队信息（返回队列中车辆的详细数据）。"""
+    # 注：由于当前充电请求是内存状态，此函数仅返回数据库中已有统计，
+    # 实时队列信息通过 /api/charging-area 接口返回
+    return []
 
 
 def save_fault_record(record):

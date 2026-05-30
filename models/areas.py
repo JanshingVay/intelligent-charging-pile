@@ -4,6 +4,7 @@ from typing import List, Optional
 from models.entities import ChargeMode
 from models.piles import FastChargingPile, TrickleChargingPile, ChargingPile, PileStatus
 from models.entities import ChargingRequest
+from config import FAST_CHARGING_PILE_NUM, TRICKLE_CHARGING_PILE_NUM
 
 
 class WaitingArea:
@@ -42,9 +43,9 @@ class ChargingArea:
         self._init_piles(max_queue_length)
 
     def _init_piles(self, max_queue_length: int) -> None:
-        for i in range(3):
+        for i in range(FAST_CHARGING_PILE_NUM):
             self.piles.append(FastChargingPile("F%d" % (i + 1), max_queue_length))
-        for i in range(2):
+        for i in range(TRICKLE_CHARGING_PILE_NUM):
             self.piles.append(TrickleChargingPile("T%d" % (i + 1), max_queue_length))
 
     def findIdlePile(self, charge_mode: str) -> Optional[ChargingPile]:

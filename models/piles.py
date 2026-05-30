@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from models.entities import ChargingRequest, PileStatus
+from config import FAST_CHARGING_POWER, TRICKLE_CHARGING_POWER
 
 
 class ChargingPile:
@@ -42,8 +43,10 @@ class ChargingPile:
         self.status = new_status
 
     def getQueueWaitTime(self) -> float:
-        """队列中所有车辆完成充电所需时间之和。"""
+        """队列中所有车辆完成充电所需时间之和（含当前正在充电的车）。"""
         total_time = 0.0
+        if self.currentChargingRequest and self.status == PileStatus.CHARGING.value:
+            total_time += self.currentChargingRequest.needPower / self.power
         for req in self.currentQueue:
             total_time += req.needPower / self.power
         return total_time
@@ -54,9 +57,9 @@ class ChargingPile:
 
 class FastChargingPile(ChargingPile):
     def __init__(self, pile_id: str, max_queue_length: int = 5) -> None:
-        super(FastChargingPile, self).__init__(pile_id, power=30.0, max_queue_length=max_queue_length)
+        super(FastChargingPile, self).__init__(pile_id, power=FAST_CHARGING_POWER, max_queue_length=max_queue_length)
 
 
 class TrickleChargingPile(ChargingPile):
     def __init__(self, pile_id: str, max_queue_length: int = 5) -> None:
-        super(TrickleChargingPile, self).__init__(pile_id, power=10.0, max_queue_length=max_queue_length)
+        super(TrickleChargingPile, self).__init__(pile_id, power=TRICKLE_CHARGING_POWER, max_queue_length=max_queue_length)

@@ -4,12 +4,14 @@ from models.entities import ChargeMode
 from controllers.system_controller import SystemController
 from models.system_report import SystemReport
 import uuid
+from config import WAITING_AREA_SIZE, CHARGING_QUEUE_LENGTH, FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 
 app = Flask(__name__)
-system = SystemController(waiting_capacity=10, max_queue_length=5)
+system = SystemController(waiting_capacity=WAITING_AREA_SIZE, max_queue_length=CHARGING_QUEUE_LENGTH)
 
 # 全局用户会话
 current_user = None
+current_user_role = None
 
 @app.route('/')
 def index():
@@ -17,16 +19,19 @@ def index():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    global current_user
+    global current_user, current_user_role
     data = request.get_json()
     user_id = data.get('user_id')
     password = data.get('password')
     
-    if system.userLogin(user_id, password):
+    result = system.userLogin(user_id, password)
+    if result["valid"]:
         current_user = user_id
+        current_user_role = result["role"]
         return jsonify({
             'success': True,
             'user_id': user_id,
+            'role': result["role"],
             'message': '登录成功'
         })
     else:
@@ -40,6 +45,7 @@ def register():
     data = request.get_json()
     user_id = data.get('user_id', '').strip()
     password = data.get('password', '').strip()
+    role = data.get('role', 'user')  # 默认 user
 
     if not user_id or not password:
         return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
@@ -47,22 +53,104 @@ def register():
     if system.userExists(user_id):
         return jsonify({'success': False, 'message': '用户名已存在'}), 409
 
-    if system.registerUser(user_id, password, float(data.get('battery_capacity', 60))):
+    if system.registerUser(user_id, password, role):
         return jsonify({'success': True, 'message': '注册成功，请登录'})
     else:
         return jsonify({'success': False, 'message': '注册失败'}), 500
 
+# ========== 管理员：查看所有用户 ==========
+
+@app.route('/api/users', methods=['GET'])
+def get_all_users():
+    err = _require_admin()
+    if err: return err
+    return jsonify({'success': True, 'users': system.getAllUsers()})
+
+# ========== 用户个人请求和详单 ==========
+
+@app.route('/api/user/requests', methods=['GET'])
+def get_user_requests():
+    if current_user is None:
+        return jsonify({'success': False, 'message': '请先登录'}), 401
+
+    requests = system.get_user_requests(current_user)
+    requests_json = []
+    for req in requests:
+        req_dict = {
+            'request_id': req.requestId,
+            'charge_mode': req.chargeMode,
+            'need_power': req.needPower,
+            'status': req.status,
+            'queue_number': req.queueNumber.getQueueString() if req.queueNumber else None,
+        }
+        if req.startTime:
+            req_dict['start_time'] = req.startTime.isoformat()
+        if req.pileId:
+            req_dict['pile_id'] = req.pileId
+        requests_json.append(req_dict)
+
+    return jsonify({'requests': requests_json})
+
+@app.route('/api/user/details', methods=['GET'])
+def get_user_details():
+    if current_user is None:
+        return jsonify({'success': False, 'message': '请先登录'}), 401
+
+    details = system.get_user_details(current_user)
+    return jsonify({'details': details})
+
+# ========== 调度策略控制（仅管理员可用）==========
+
+def _require_admin():
+    if current_user_role != 'admin':
+        return jsonify({'success': False, 'message': '需要管理员权限'}), 403
+    return None
+
+@app.route('/api/system/fault-mode', methods=['PUT'])
+def set_fault_dispatch_mode():
+    err = _require_admin()
+    if err: return err
+    data = request.get_json()
+    mode = data.get('mode', 'priority')
+    system.set_fault_dispatch_mode(mode)
+    return jsonify({'success': True, 'mode': mode})
+
+@app.route('/api/system/fault-mode', methods=['GET'])
+def get_fault_dispatch_mode():
+    err = _require_admin()
+    if err: return err
+    return jsonify({'mode': system.faultDispatchMode})
+
+@app.route('/api/system/trigger-multispot', methods=['POST'])
+def trigger_multispot_dispatch():
+    err = _require_admin()
+    if err: return err
+    data = request.get_json()
+    mode = data.get('charge_mode', 'Fast')
+    count = int(data.get('count', 2))
+    system.triggerMultiSpotOptimal(count, mode, datetime.now())
+    return jsonify({'success': True, 'message': '单次多桩调度已执行'})
+
+@app.route('/api/system/trigger-batch', methods=['POST'])
+def trigger_batch_dispatch():
+    err = _require_admin()
+    if err: return err
+    system.triggerBatchOptimal()
+    return jsonify({'success': True, 'message': '批量调度已执行'})
+
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    global current_user
+    global current_user, current_user_role
     current_user = None
+    current_user_role = None
     return jsonify({'success': True})
 
 @app.route('/api/user/status', methods=['GET'])
 def get_user_status():
     return jsonify({
         'logged_in': current_user is not None,
-        'user_id': current_user
+        'user_id': current_user,
+        'role': current_user_role
     })
 
 @app.route('/api/charge/request', methods=['POST'])
@@ -75,6 +163,12 @@ def submit_charge_request():
     need_power = float(data.get('need_power', 30))
     
     req_id = system.submitChargeReq(current_user, charge_mode, need_power, datetime.now())
+    
+    if req_id is None:
+        return jsonify({
+            'success': False,
+            'message': '充电桩队列和等候区均已满，请稍后再试'
+        }), 503
     
     return jsonify({
         'success': True,
@@ -285,4 +379,4 @@ def get_fault_details():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=FLASK_DEBUG, host=FLASK_HOST, port=FLASK_PORT)

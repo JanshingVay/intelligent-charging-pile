@@ -16,7 +16,7 @@ import db
 class SystemController:
     """系统主控制器：统一对外提供登录、充电、故障等业务接口。"""
 
-    def __init__(self, waiting_capacity: int = 10, max_queue_length: int = 5) -> None:
+    def __init__(self, waiting_capacity=10, max_queue_length=5):
         db.init_db()
         db.ensure_default_users()
 
@@ -29,19 +29,48 @@ class SystemController:
         self.users: Dict[str, User] = {}
         self.faultRecords: List[FaultRecord] = []
         self.chargingDetails: List[ChargingDetail] = []
+        self.faultDispatchMode = "priority"  # "priority" or "time"
+        self.isAdminMode = False
 
         self._load_sequence_numbers()
         self._load_pile_stats()
         self._load_fault_records()
         self._load_charging_details()
 
-    def _load_sequence_numbers(self) -> None:
+    def get_user_requests(self, user_id):
+        """获取指定用户的所有请求（等候区+充电区+队列）。"""
+        requests = []
+        for req in self.waitingArea.currentRequests:
+            if req.userId == user_id:
+                requests.append(req)
+        for pile in self.chargingArea.getAllPiles():
+            for req in pile.currentQueue:
+                if req.userId == user_id:
+                    requests.append(req)
+            if pile.currentChargingRequest and pile.currentChargingRequest.userId == user_id:
+                requests.append(pile.currentChargingRequest)
+        return requests
+
+    def get_user_details(self, user_id):
+        """获取指定用户的充电详单。"""
+        rows = db.load_charging_details(user_id)
+        return rows
+
+    def set_fault_dispatch_mode(self, mode):
+        """设置故障调度模式：priority（优先级）或 time（时间顺序）。"""
+        self.faultDispatchMode = mode
+        db.set_system_state("fault_dispatch_mode", mode)
+
+    def _load_sequence_numbers(self):
         fast_seq = db.get_system_state("fast_seq")
         trickle_seq = db.get_system_state("trickle_seq")
         if fast_seq is not None:
             self.schedulingController._fast_seq = int(fast_seq)
         if trickle_seq is not None:
             self.schedulingController._trickle_seq = int(trickle_seq)
+        mode = db.get_system_state("fault_dispatch_mode")
+        if mode:
+            self.faultDispatchMode = mode
 
     def _save_sequence_numbers(self) -> None:
         db.set_system_state("fast_seq", self.schedulingController._fast_seq)
@@ -83,16 +112,22 @@ class SystemController:
             )
             self.chargingDetails.append(detail)
 
-    def userLogin(self, userId: str, pwd: str) -> bool:
+    def userLogin(self, userId, pwd):
         return db.verify_user(userId, pwd)
 
-    def registerUser(self, userId: str, pwd: str, battery_capacity: float = 60.0) -> bool:
-        if db.register_user(userId, pwd):
+    def registerUser(self, userId, pwd, role='user', battery_capacity=60.0):
+        if db.register_user(userId, pwd, role):
             user = User(userId, pwd)
             user.vehicle = ElectricVehicle(battery_capacity)
             self.users[userId] = user
             return True
         return False
+
+    def getUserRole(self, userId):
+        return db.get_user_role(userId)
+
+    def getAllUsers(self):
+        return db.get_all_users()
 
     def userExists(self, userId: str) -> bool:
         return db.user_exists(userId)
@@ -151,7 +186,6 @@ class SystemController:
             current_time = datetime.now()
 
         queue_num = self.schedulingController.generateQueueNumber(chargeMode)
-        self._save_sequence_numbers()
         req = ChargingRequest(
             request_id=req_id,
             user_id=userId,
@@ -161,14 +195,21 @@ class SystemController:
         )
 
         # 基础调度：选择总时长最短的桩；无可用桩则进入等候区
+        accepted = False
         best_pile = self.schedulingController.findBestPileForRequest(req, self.chargingArea)
         if best_pile:
             self.schedulingController.dispatchToPile(req, best_pile)
             self._tryStartCharging(best_pile, current_time)
-        else:
-            if self.waitingArea.checkCapacity():
-                self.waitingArea.addRequest(req)
-                self._tryBatchOptimalDispatch()
+            accepted = True
+        elif self.waitingArea.checkCapacity():
+            self.waitingArea.addRequest(req)
+            self._tryBatchOptimalDispatch()
+            accepted = True
+
+        if not accepted:
+            return None
+
+        self._save_sequence_numbers()
 
         # 叫号服务：将等候区车辆调度至充电区
         if not self.schedulingController.isCallPaused:
@@ -258,8 +299,9 @@ class SystemController:
                     }
                     detail = self.billingController.calculateFee(charge_data)
                     if detail:
+                        detail.userId = req.userId
                         self.chargingDetails.append(detail)
-                        db.save_charging_detail(detail)
+                        db.save_charging_detail(detail, req.userId)
 
                 self._tryStartCharging(pile, current_time)
                 self._dispatchFromWaitingArea()
@@ -288,8 +330,9 @@ class SystemController:
             }
             detail = self.billingController.calculateFee(charge_data)
             if detail:
+                detail.userId = req.userId
                 self.chargingDetails.append(detail)
-                db.save_charging_detail(detail)
+                db.save_charging_detail(detail, req.userId)
 
             self._tryStartCharging(pile, current_time)
             self._dispatchFromWaitingArea()
@@ -382,3 +425,20 @@ class SystemController:
         )
         self._dispatchFromWaitingArea()
         self._startAllAvailablePiles(current_time)
+
+    def triggerMultiSpotOptimal(self, count: int, mode: str, current_time: Optional[datetime] = None) -> None:
+        """触发单次多桩最优调度。"""
+        if current_time is None:
+            current_time = datetime.now()
+        self.schedulingController.calcMultiSpotOptimal(
+            count, mode, self.chargingArea, self.waitingArea
+        )
+        self._dispatchFromWaitingArea()
+        self._startAllAvailablePiles(current_time)
+
+    def triggerBatchOptimal(self) -> None:
+        """触发批量最优调度。"""
+        all_reqs = self.waitingArea.currentRequests.copy()
+        for req in all_reqs:
+            self.waitingArea.removeRequest(req)
+        self.schedulingController.calcBatchOptimal(all_reqs, self.chargingArea)

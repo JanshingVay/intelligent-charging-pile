@@ -3,6 +3,12 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from config import (
+    PEAK_PRICE, NORMAL_PRICE, VALLEY_PRICE,
+    PEAK_HOURS, NORMAL_HOURS, VALLEY_HOURS,
+    SERVICE_FEE
+)
+
 
 class ChargeMode(Enum):
     FAST = "Fast"
@@ -81,9 +87,11 @@ class ChargingDetail:
         stop_time: datetime,
         charging_fee: float,
         service_fee: float,
+        user_id: str = 'unknown',
     ) -> None:
         self.detailId: str = detail_id
         self.pileId: str = pile_id
+        self.userId: str = user_id
         self.energyAmount: float = energy_amount
         self.startTime: datetime = start_time
         self.stopTime: datetime = stop_time
@@ -113,21 +121,18 @@ class FaultRecord:
 class BillingRule:
     @staticmethod
     def get_price_per_kwh(current_time: datetime) -> float:
-        """按时间段返回单位电价：峰时1.0 / 平时0.7 / 谷时0.4 元/度。"""
         hour = current_time.hour
-        is_peak = (hour >= 10 and hour < 15) or (hour >= 18 and hour < 21)
-        is_normal = (
-            (hour >= 7 and hour < 10)
-            or (hour >= 15 and hour < 18)
-            or (hour >= 21 and hour < 23)
-        )
-        if is_peak:
-            return 1.0
-        elif is_normal:
-            return 0.7
-        else:
-            return 0.4
+        for start, end in PEAK_HOURS:
+            if start <= hour < end:
+                return PEAK_PRICE
+        for start, end in NORMAL_HOURS:
+            if start <= hour < end:
+                return NORMAL_PRICE
+        for start, end in VALLEY_HOURS:
+            if start <= hour < end:
+                return VALLEY_PRICE
+        return NORMAL_PRICE
 
     @staticmethod
     def get_service_fee() -> float:
-        return 0.8
+        return SERVICE_FEE
