@@ -915,15 +915,11 @@
 
         async function refreshReports(period = 'daily') {
             const tbody = document.getElementById('reports-tbody');
-            if (!isAdminMode) {
-                tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">需要管理员权限</td></tr>';
-                return;
-            }
             try {
                 const response = await fetch(`/api/reports/${period}`);
                 const data = await response.json();
                 if (!data.success) {
-                    showMessage(data.message, 'error');
+                    tbody.innerHTML = `<tr><td colspan="8" class="text-muted text-center">${data.message}</td></tr>`;
                     return;
                 }
                 tbody.innerHTML = data.reports.map(r => `
@@ -945,10 +941,6 @@
 
         async function refreshUsers() {
             const tbody = document.getElementById('users-table-body');
-            if (!isAdminMode) {
-                tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">需要管理员权限</td></tr>';
-                return;
-            }
             try {
                 const response = await fetch('/api/users');
                 const data = await response.json();
@@ -959,6 +951,8 @@
                             <td>${user.role === 'admin' ? '管理员' : '普通用户'}</td>
                         </tr>
                     `).join('');
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="2" class="text-muted text-center">${data.message}</td></tr>`;
                 }
             } catch (error) {
                 console.error(error);
