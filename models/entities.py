@@ -68,6 +68,7 @@ class ChargingRequest:
         self.queueNumber: QueueNumber = queue_number
         self.startTime: Optional[datetime] = None
         self.pileId: Optional[str] = None
+        self.submitTime: datetime = datetime.now()
 
     def updateModeAndQueue(self, new_mode: str, new_queue_num: QueueNumber) -> None:
         self.chargeMode = new_mode

@@ -141,8 +141,11 @@
                         <div class="col-md-8">
                             <div class="card">
                                 <div class="card-header">等候区</div>
-                                <div class="card-body waiting-area-scroll" id="waiting-area">
-                                    <p class="text-muted">暂无等候请求</p>
+                                <div class="card-body">
+                                    <div id="my-queue-position" class="alert alert-info mb-3" style="display:none;"></div>
+                                    <div class="waiting-area-scroll" id="waiting-area">
+                                        <p class="text-muted">暂无等候请求</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -216,6 +219,40 @@
 
                 <!-- 管理员控制台 -->
                 <div class="tab-pane fade" id="pane-admin" role="tabpanel" aria-labelledby="tab-admin">
+                    <div class="row mb-4">
+                        <div class="col-md-12">
+                            <div class="card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <span>报表统计</span>
+                                    <div class="btn-group">
+                                        <button class="btn btn-outline-primary btn-sm" onclick="refreshReports('daily')">日报</button>
+                                        <button class="btn btn-outline-primary btn-sm" onclick="refreshReports('weekly')">周报</button>
+                                        <button class="btn btn-outline-primary btn-sm" onclick="refreshReports('monthly')">月报</button>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="table-responsive">
+                                        <table class="table table-striped table-hover">
+                                            <thead>
+                                                <tr>
+                                                    <th>时段</th>
+                                                    <th>充电桩编号</th>
+                                                    <th>累计充电次数</th>
+                                                    <th>累计充电时长 (h)</th>
+                                                    <th>累计充电电量 (kWh)</th>
+                                                    <th>累计充电费用</th>
+                                                    <th>累计服务费用</th>
+                                                    <th>累计总费用</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="reports-tbody">
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="row mb-4">
                         <div class="col-md-6">
                             <div class="card">
@@ -312,6 +349,31 @@
         </div>
     </div>
 
+    <!-- 取消请求模态框 -->
+    <div class="modal fade" id="cancel-request-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">取消充电请求</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="cancel-request-id">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="rejoin-queue-check">
+                        <label class="form-check-label" for="rejoin-queue-check">
+                            取消后重新进入等候区排队（会重新生成排队号）
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消操作</button>
+                    <button type="button" class="btn btn-danger" onclick="submitCancelRequest()">确认取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -325,6 +387,7 @@
         let isAdminMode = false;
 
         const modifyRequestModal = new bootstrap.Modal(document.getElementById('modify-request-modal'));
+        const cancelRequestModal = new bootstrap.Modal(document.getElementById('cancel-request-modal'));
 
         function showMessage(msg, type = 'info') {
             const logDiv = document.getElementById('message-log');
@@ -382,7 +445,8 @@
                 refreshMyRequests(),
                 refreshMyDetails(),
                 refreshAdminPilesDetail(),
-                refreshUsers()
+                refreshUsers(),
+                refreshReports()
             ]);
         }
 
@@ -531,9 +595,13 @@
                 });
 
                 const data = await response.json();
-                showMessage(data.message, 'success');
-                modifyRequestModal.hide();
-                refreshData();
+                if (data.success) {
+                    showMessage(data.message, 'success');
+                    modifyRequestModal.hide();
+                    refreshData();
+                } else {
+                    showMessage(data.message, 'error');
+                }
             } catch (error) {
                 showMessage('修改失败: ' + error, 'error');
             }
@@ -545,6 +613,26 @@
                 const response = await fetch('/api/waiting-area');
                 const data = await response.json();
                 const waitingDiv = document.getElementById('waiting-area');
+                const myPositionDiv = document.getElementById('my-queue-position');
+                
+                // 计算用户自己的位置
+                let myIndex = -1;
+                for (let i = 0; i < data.requests.length; i++) {
+                    if (data.requests[i].user_id === currentUserId) {
+                        myIndex = i;
+                        break;
+                    }
+                }
+                
+                if (myIndex >= 0) {
+                    const aheadCount = myIndex;
+                    myPositionDiv.style.display = 'block';
+                    myPositionDiv.innerHTML = `
+                        <strong>我的排队位置:</strong> 第 ${myIndex + 1} 位，前面有 ${aheadCount} 辆车在等候
+                    `;
+                } else {
+                    myPositionDiv.style.display = 'none';
+                }
                 
                 if (data.requests.length === 0) {
                     waitingDiv.innerHTML = '<p class="text-muted">暂无等候请求</p>';
@@ -743,6 +831,7 @@
                 isAdminMode = true;
                 showMessage('已进入管理员模式', 'success');
                 refreshFaultModeSelect();
+                refreshReports();
             }
         }
 
@@ -806,18 +895,48 @@
                             <div class="card-header">${pile.pile_id}</div>
                             <div class="card-body small">
                                 <p><strong>状态:</strong> ${pile.status}</p>
-                                <p><strong>当前充电:</strong> ${pile.current_charging ? pile.current_charging.user_id + ' (' + pile.current_charging.queue_number + ')' : '无'}</p>
+                                <p><strong>当前充电:</strong> ${pile.current_charging ? pile.current_charging.user_id + ' (电池:' + (pile.current_charging.battery_capacity || 'N/A') + 'kWh, 需要:' + pile.current_charging.need_power + 'kWh)' : '无'}</p>
                                 <p><strong>队列车辆:</strong></p>
                                 <div>
                                     ${pile.queue.map(q => `
                                         <div class="queue-item">
-                                            ${q.user_id} - ${q.charge_mode} - ${q.need_power}kWh - ${q.queue_number}
+                                            ${q.user_id} - 电池:${q.battery_capacity || 'N/A'}kWh - ${q.charge_mode} - ${q.need_power}kWh - ${q.queue_number}
                                         </div>
                                     `).join('') || '<span class="text-muted">无</span>'}
                                 </div>
                             </div>
                         </div>
                     </div>
+                `).join('');
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        async function refreshReports(period = 'daily') {
+            const tbody = document.getElementById('reports-tbody');
+            if (!isAdminMode) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center">需要管理员权限</td></tr>';
+                return;
+            }
+            try {
+                const response = await fetch(`/api/reports/${period}`);
+                const data = await response.json();
+                if (!data.success) {
+                    showMessage(data.message, 'error');
+                    return;
+                }
+                tbody.innerHTML = data.reports.map(r => `
+                    <tr>
+                        <td>${r.time_label}</td>
+                        <td>${r.pile_id}</td>
+                        <td>${r.count}</td>
+                        <td>${r.duration.toFixed(2)}</td>
+                        <td>${r.energy.toFixed(1)}</td>
+                        <td>${r.charging_fee.toFixed(2)}</td>
+                        <td>${r.service_fee.toFixed(2)}</td>
+                        <td>${r.total_fee.toFixed(2)}</td>
+                    </tr>
                 `).join('');
             } catch (error) {
                 console.error(error);
@@ -847,19 +966,32 @@
         }
 
         // ========== 通用操作 ==========
-        async function cancelRequest(reqId) {
-            if (isProcessing) return;
-            isProcessing = true;
+        function openCancelModal(requestId) {
+            document.getElementById('cancel-request-id').value = requestId;
+            document.getElementById('rejoin-queue-check').checked = false;
+            cancelRequestModal.show();
+        }
+
+        async function submitCancelRequest() {
+            const reqId = document.getElementById('cancel-request-id').value;
+            const rejoin = document.getElementById('rejoin-queue-check').checked;
             try {
-                const response = await fetch(`/api/request/${reqId}/cancel`, { method: 'POST' });
+                const response = await fetch(`/api/request/${reqId}/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rejoin_queue: rejoin })
+                });
                 const data = await response.json();
-                showMessage(data.message, 'success');
-                await Promise.all([refreshWaitingArea(), refreshChargingArea()]);
+                showMessage(data.message, data.success ? 'success' : 'error');
+                cancelRequestModal.hide();
+                refreshData();
             } catch (error) {
                 showMessage('取消失败: ' + error, 'error');
-            } finally {
-                isProcessing = false;
             }
+        }
+
+        async function cancelRequest(reqId) {
+            openCancelModal(reqId);
         }
 
         async function finishCharge(pileId) {

@@ -186,7 +186,12 @@ def modify_request(req_id):
     charge_mode = data.get('charge_mode')
     need_power = float(data.get('need_power', 30))
     
-    system.modifyChargeReq(req_id, opt_type, charge_mode, need_power)
+    ok = system.modifyChargeReq(req_id, opt_type, charge_mode, need_power)
+    if not ok:
+        return jsonify({
+            'success': False,
+            'message': '充电区（正在充电或排队）不允许修改请求，请取消后重新排队'
+        }), 400
     
     return jsonify({
         'success': True,
@@ -198,11 +203,16 @@ def cancel_request(req_id):
     if current_user is None:
         return jsonify({'success': False, 'message': '请先登录'}), 401
     
-    system.cancelChargeReq(req_id, datetime.now())
+    data = request.get_json()
+    rejoin_queue = data.get('rejoin_queue', False)
+    system.cancelChargeReq(req_id, rejoin_queue, datetime.now())
     
+    msg = '请求已取消'
+    if rejoin_queue:
+        msg = '已取消并重新进入等候区排队'
     return jsonify({
         'success': True,
-        'message': '请求已取消'
+        'message': msg
     })
 
 @app.route('/api/pile/<pile_id>/finish', methods=['POST'])
@@ -245,6 +255,21 @@ def resolve_fault(pile_id):
         'message': '故障已修复'
     })
 
+@app.route('/api/reports/<period>', methods=['GET'])
+def get_reports(period):
+    if current_user_role != 'admin':
+        return jsonify({'success': False, 'message': '需要管理员权限'}), 403
+    
+    if period not in ['daily', 'weekly', 'monthly']:
+        return jsonify({'success': False, 'message': '无效的时段'}), 400
+    
+    reports = system.generateReports(period, datetime.now())
+    
+    return jsonify({
+        'success': True,
+        'reports': reports
+    })
+
 @app.route('/api/stats/piles', methods=['GET'])
 def get_pile_stats():
     pile_report = SystemReport.generatePileReport(system.chargingArea.getAllPiles())
@@ -264,13 +289,18 @@ def get_fault_stats():
 def get_waiting_area():
     requests_info = []
     for req in system.waitingArea.currentRequests:
+        wait_seconds = (datetime.now() - req.submitTime).total_seconds()
+        user = system.users.get(req.userId)
+        battery_cap = user.vehicle.batteryCapacity if user and user.vehicle else 60.0
         requests_info.append({
             'request_id': req.requestId,
             'user_id': req.userId,
+            'battery_capacity': battery_cap,
             'charge_mode': req.chargeMode,
             'need_power': req.needPower,
             'status': req.status,
-            'queue_number': req.queueNumber.getQueueString() if req.queueNumber else None
+            'queue_number': req.queueNumber.getQueueString() if req.queueNumber else None,
+            'wait_seconds': wait_seconds
         })
     return jsonify({
         'max_capacity': system.waitingArea.maxCapacity,
@@ -285,9 +315,12 @@ def get_charging_area():
         pile_type = '快充' if pile.pileId.startswith('F') else '慢充'
         queue_items = []
         for req in pile.currentQueue:
+            user = system.users.get(req.userId)
+            battery_cap = user.vehicle.batteryCapacity if user and user.vehicle else 60.0
             queue_items.append({
                 'request_id': req.requestId,
                 'user_id': req.userId,
+                'battery_capacity': battery_cap,
                 'charge_mode': req.chargeMode,
                 'need_power': req.needPower,
                 'queue_number': req.queueNumber.getQueueString() if req.queueNumber else None,
@@ -296,9 +329,12 @@ def get_charging_area():
         current = None
         if pile.currentChargingRequest:
             req = pile.currentChargingRequest
+            user = system.users.get(req.userId)
+            battery_cap = user.vehicle.batteryCapacity if user and user.vehicle else 60.0
             current = {
                 'request_id': req.requestId,
                 'user_id': req.userId,
+                'battery_capacity': battery_cap,
                 'charge_mode': req.chargeMode,
                 'need_power': req.needPower,
                 'queue_number': req.queueNumber.getQueueString() if req.queueNumber else None,

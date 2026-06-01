@@ -129,6 +129,78 @@ class SystemController:
     def getAllUsers(self):
         return db.get_all_users()
 
+    def generateReports(self, period: str, current_time: datetime):
+        from datetime import timedelta
+        
+        start_time = None
+        label = ""
+        if period == "daily":
+            start_time = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            label = start_time.strftime("%Y-%m-%d")
+        elif period == "weekly":
+            start_time = current_time - timedelta(days=current_time.weekday())
+            start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            label = f"{start_time.strftime('%Y-%m-%d')}~{current_time.strftime('%Y-%m-%d')}"
+        elif period == "monthly":
+            start_time = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            label = start_time.strftime("%Y-%m")
+        
+        # 从数据库或内存详单统计
+        pile_reports = {}
+        for pile in self.chargingArea.getAllPiles():
+            pile_reports[pile.pileId] = {
+                "time_label": label,
+                "pile_id": pile.pileId,
+                "count": 0,
+                "duration": 0.0,
+                "energy": 0.0,
+                "charging_fee": 0.0,
+                "service_fee": 0.0,
+                "total_fee": 0.0
+            }
+        
+        for detail in self.chargingDetails:
+            if detail.startTime >= start_time:
+                if detail.pileId not in pile_reports:
+                    pile_reports[detail.pileId] = {
+                        "time_label": label,
+                        "pile_id": detail.pileId,
+                        "count": 0,
+                        "duration": 0.0,
+                        "energy": 0.0,
+                        "charging_fee": 0.0,
+                        "service_fee": 0.0,
+                        "total_fee": 0.0
+                    }
+                report = pile_reports[detail.pileId]
+                report["count"] += 1
+                report["duration"] += (detail.stopTime - detail.startTime).total_seconds() / 3600
+                report["energy"] += detail.energyAmount
+                report["charging_fee"] += detail.chargingFee
+                report["service_fee"] += detail.serviceFee
+                report["total_fee"] += detail.totalFee
+        
+        # 加上数据库中保存的统计（如果存在）
+        db_reports = db.get_pile_stats()
+        for pile_id, db_stat in db_reports.items():
+            if pile_id not in pile_reports:
+                pile_reports[pile_id] = {
+                    "time_label": label,
+                    "pile_id": pile_id,
+                    "count": 0,
+                    "duration": 0.0,
+                    "energy": 0.0,
+                    "charging_fee": 0.0,
+                    "service_fee": 0.0,
+                    "total_fee": 0.0
+                }
+            report = pile_reports[pile_id]
+            report["count"] += db_stat["total_charge_count"]
+            report["duration"] += db_stat["total_charge_duration"]
+            report["energy"] += db_stat["total_charge_power"]
+        
+        return list(pile_reports.values())
+
     def userExists(self, userId: str) -> bool:
         return db.user_exists(userId)
 
@@ -142,22 +214,28 @@ class SystemController:
         return count
 
     def _getBatchTriggerThreshold(self) -> int:
-        """批量调度触发阈值：N + 5*M（等候区容量 + 全部桩队列容量）。"""
+        """批量调度触发阈值：全部车位数量（等候区 + 充电桩充电位+排队位）。"""
         num_piles = len(self.chargingArea.getAllPiles())
-        return self.waitingArea.maxCapacity + num_piles * self.maxQueueLength
+        return self.waitingArea.maxCapacity + num_piles * (1 + self.maxQueueLength)
 
     def _tryBatchOptimalDispatch(self) -> None:
         """当站点车辆数达到 N+5*M 时，触发批量最优调度。"""
         if self.schedulingController.isCallPaused:
             return
-        if not self.waitingArea.currentRequests:
-            return
         if self._getTotalVehicleCount() < self._getBatchTriggerThreshold():
             return
 
-        all_reqs = self.waitingArea.currentRequests.copy()
-        for req in all_reqs:
-            self.waitingArea.removeRequest(req)
+        # 收集全部未充电车辆：所有桩的队列 + 等候区
+        all_reqs: list = []
+        for pile in self.chargingArea.getAllPiles():
+            all_reqs.extend(pile.currentQueue)
+            pile.currentQueue.clear()
+        all_reqs.extend(self.waitingArea.currentRequests)
+        self.waitingArea.currentRequests.clear()
+
+        if not all_reqs:
+            return
+
         self.schedulingController.calcBatchOptimal(all_reqs, self.chargingArea)
 
     def _dispatchFromWaitingArea(self) -> None:
@@ -194,7 +272,7 @@ class SystemController:
             queue_number=queue_num
         )
 
-        # 基础调度：选择总时长最短的桩；无可用桩则进入等候区
+        # 需求：初始提交时，选匹配模式总时长最短的桩（等待时间+充电时间）
         accepted = False
         best_pile = self.schedulingController.findBestPileForRequest(req, self.chargingArea)
         if best_pile:
@@ -235,65 +313,82 @@ class SystemController:
         chargeMode: str,
         needPower: float,
         current_time: Optional[datetime] = None,
+    ) -> bool:
+        if current_time is None:
+            current_time = datetime.now()
+
+        # 先找请求：等候区、充电区队列、正在充电中
+        req = self.waitingArea.getRequestById(reqId)
+        req_location = "waiting" if req else None
+
+        if not req:
+            for pile in self.chargingArea.getAllPiles():
+                if pile.currentChargingRequest and pile.currentChargingRequest.requestId == reqId:
+                    req = pile.currentChargingRequest
+                    req_location = "charging"
+                    break
+                if not req:
+                    for r in pile.currentQueue:
+                        if r.requestId == reqId:
+                            req = r
+                            req_location = "queue"
+                            break
+                    if req:
+                        break
+
+        if not req:
+            return False
+
+        # 在充电区（正在充电或队列）禁止修改，返回失败
+        if req_location in ("charging", "queue"):
+            return False
+
+        # 仅等候区允许修改
+        if optType == "mode":
+            # 等候区修改模式：重新生成排队号，排至新模式队尾
+            self.waitingArea.removeRequest(req)
+            new_queue_num = self.schedulingController.generateQueueNumber(chargeMode)
+            self._save_sequence_numbers()
+            req.updateModeAndQueue(chargeMode, new_queue_num)
+            best_pile = self.schedulingController.findBestPileForRequest(req, self.chargingArea)
+            if best_pile:
+                self.schedulingController.dispatchToPile(req, best_pile)
+            else:
+                self.waitingArea.addRequest(req)
+        elif optType == "power":
+            # 修改电量：排队号不变
+            req.updateNeedPower(needPower)
+        
+        # 修改后再次触发叫号
+        self._dispatchFromWaitingArea()
+        self._startAllAvailablePiles(current_time)
+        return True
+
+    def cancelChargeReq(
+        self,
+        reqId: str,
+        rejoin_queue: bool = False,
+        current_time: Optional[datetime] = None,
     ) -> None:
         if current_time is None:
             current_time = datetime.now()
 
         req = self.waitingArea.getRequestById(reqId)
         if req:
-            if optType == "mode":
-                # 等候区修改模式：重新生成排队号，排至新模式队尾
-                self.waitingArea.removeRequest(req)
-                new_queue_num = self.schedulingController.generateQueueNumber(chargeMode)
-                self._save_sequence_numbers()
-                req.updateModeAndQueue(chargeMode, new_queue_num)
-                best_pile = self.schedulingController.findBestPileForRequest(req, self.chargingArea)
-                if best_pile:
-                    self.schedulingController.dispatchToPile(req, best_pile)
-                else:
-                    self.waitingArea.addRequest(req)
-            elif optType == "power":
-                # 等候区修改电量：保留原排队号
-                req.updateNeedPower(needPower)
-
-            self._dispatchFromWaitingArea()
-            self._startAllAvailablePiles(current_time)
-            return
-
-        # 充电区排队中（尚未开始充电）仅允许修改电量
-        req = self.chargingArea.getRequestFromQueue(reqId)
-        if req and req.status == RequestStatus.WAITING.value:
-            if optType == "power":
-                req.updateNeedPower(needPower)
-
-    def cancelChargeReq(self, reqId: str, current_time: Optional[datetime] = None) -> None:
-        if current_time is None:
-            current_time = datetime.now()
-
-        req = self.waitingArea.getRequestById(reqId)
-        if req:
-            req.status = RequestStatus.CANCELLED.value
             self.waitingArea.removeRequest(req)
-            return
-
-        req = self.chargingArea.getRequestFromQueue(reqId)
-        if req:
             req.status = RequestStatus.CANCELLED.value
-            self.chargingArea.removeRequestFromQueue(req)
             return
 
-        # 充电区取消：立刻结算已充费用并释放充电桩
         for pile in self.chargingArea.getAllPiles():
             if pile.currentChargingRequest and pile.currentChargingRequest.requestId == reqId:
                 req = pile.currentChargingRequest
-                req.status = RequestStatus.CANCELLED.value
-
+                saved_start_time = pile.chargeStartTime
                 stop_result = pile.stopCharging(current_time)
                 self._save_pile_stats(pile)
                 if stop_result["powerUsed"] > 0:
                     charge_data = {
                         "pileId": pile.pileId,
-                        "startTime": pile.chargeStartTime,
+                        "startTime": saved_start_time,
                         "stopTime": current_time,
                         "powerUsed": stop_result["powerUsed"]
                     }
@@ -302,11 +397,41 @@ class SystemController:
                         detail.userId = req.userId
                         self.chargingDetails.append(detail)
                         db.save_charging_detail(detail, req.userId)
-
+                pile.status = PileStatus.AVAILABLE.value
+                # 处理请求状态
+                if rejoin_queue:
+                    req.status = RequestStatus.WAITING.value
+                    req.pileId = None
+                    req.startTime = None
+                    new_queue_num = self.schedulingController.generateQueueNumber(req.chargeMode)
+                    self._save_sequence_numbers()
+                    req.queueNumber = new_queue_num
+                    self.waitingArea.addRequest(req)
+                else:
+                    req.status = RequestStatus.CANCELLED.value
+                # 立即启动下一辆充电
                 self._tryStartCharging(pile, current_time)
                 self._dispatchFromWaitingArea()
                 self._startAllAvailablePiles(current_time)
-                break
+                return
+
+            # 在桩队列中取消
+            for idx, r in enumerate(pile.currentQueue):
+                if r.requestId == reqId:
+                    pile.currentQueue.pop(idx)
+                    if rejoin_queue:
+                        r.status = RequestStatus.WAITING.value
+                        r.pileId = None
+                        new_queue_num = self.schedulingController.generateQueueNumber(r.chargeMode)
+                        self._save_sequence_numbers()
+                        r.queueNumber = new_queue_num
+                        self.waitingArea.addRequest(r)
+                    else:
+                        r.status = RequestStatus.CANCELLED.value
+                    # 取消后触发叫号
+                    self._dispatchFromWaitingArea()
+                    self._startAllAvailablePiles(current_time)
+                    return
 
     def finishCharge(self, pileId: str, current_time: Optional[datetime] = None) -> None:
         if current_time is None:
@@ -320,19 +445,21 @@ class SystemController:
         if req:
             req.status = RequestStatus.COMPLETED.value
 
+            saved_start_time = pile.chargeStartTime
             stop_result = pile.stopCharging(current_time)
             self._save_pile_stats(pile)
-            charge_data = {
-                "pileId": pile.pileId,
-                "startTime": pile.chargeStartTime,
-                "stopTime": current_time,
-                "powerUsed": stop_result["powerUsed"]
-            }
-            detail = self.billingController.calculateFee(charge_data)
-            if detail:
-                detail.userId = req.userId
-                self.chargingDetails.append(detail)
-                db.save_charging_detail(detail, req.userId)
+            if stop_result["powerUsed"] > 0:
+                charge_data = {
+                    "pileId": pile.pileId,
+                    "startTime": saved_start_time,
+                    "stopTime": current_time,
+                    "powerUsed": stop_result["powerUsed"]
+                }
+                detail = self.billingController.calculateFee(charge_data)
+                if detail:
+                    detail.userId = req.userId
+                    self.chargingDetails.append(detail)
+                    db.save_charging_detail(detail, req.userId)
 
             self._tryStartCharging(pile, current_time)
             self._dispatchFromWaitingArea()
@@ -364,6 +491,25 @@ class SystemController:
         if not pile:
             return
 
+        # 先停止当前充电并计费（必须在设置 FAULT 前，否则 stopCharging 会跳过）
+        if pile.currentChargingRequest:
+            faulted_user_id = pile.currentChargingRequest.userId
+            saved_start_time = pile.chargeStartTime
+            stop_result = pile.stopCharging(current_time)
+            self._save_pile_stats(pile)
+            if stop_result["powerUsed"] > 0:
+                charge_data = {
+                    "pileId": pile.pileId,
+                    "startTime": saved_start_time,
+                    "stopTime": current_time,
+                    "powerUsed": stop_result["powerUsed"]
+                }
+                detail = self.billingController.calculateFee(charge_data)
+                if detail:
+                    detail.userId = faulted_user_id
+                    self.chargingDetails.append(detail)
+                    db.save_charging_detail(detail, faulted_user_id)
+
         pile.setStatus(PileStatus.FAULT.value)
 
         record_id = str(uuid.uuid4())[:8]
@@ -375,21 +521,6 @@ class SystemController:
         )
         self.faultRecords.append(fault_record)
         db.save_fault_record(fault_record)
-
-        if pile.currentChargingRequest:
-            stop_result = pile.stopCharging(current_time)
-            self._save_pile_stats(pile)
-            if stop_result["powerUsed"] > 0:
-                charge_data = {
-                    "pileId": pile.pileId,
-                    "startTime": pile.chargeStartTime,
-                    "stopTime": current_time,
-                    "powerUsed": stop_result["powerUsed"]
-                }
-                detail = self.billingController.calculateFee(charge_data)
-                if detail:
-                    self.chargingDetails.append(detail)
-                    db.save_charging_detail(detail)
 
         if dispatch_strategy == "time_seq":
             self.schedulingController.handleTimeSeqDispatch(
@@ -437,8 +568,12 @@ class SystemController:
         self._startAllAvailablePiles(current_time)
 
     def triggerBatchOptimal(self) -> None:
-        """触发批量最优调度。"""
-        all_reqs = self.waitingArea.currentRequests.copy()
-        for req in all_reqs:
-            self.waitingArea.removeRequest(req)
-        self.schedulingController.calcBatchOptimal(all_reqs, self.chargingArea)
+        """手动触发批量最优调度。"""
+        all_reqs: list = []
+        for pile in self.chargingArea.getAllPiles():
+            all_reqs.extend(pile.currentQueue)
+            pile.currentQueue.clear()
+        all_reqs.extend(self.waitingArea.currentRequests)
+        self.waitingArea.currentRequests.clear()
+        if all_reqs:
+            self.schedulingController.calcBatchOptimal(all_reqs, self.chargingArea)
